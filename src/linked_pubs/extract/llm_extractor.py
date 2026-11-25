@@ -30,6 +30,28 @@ Include facts the text presents as established background as well as the study's
 Skip aims, methods descriptions and speculation. If the text contains no factual statements, \
 return an empty list."""
 
+# v2: v1 lost verdicts by rephrasing ("all X segregate randomly" -> "X do not segregate
+# asymmetrically", misread as a contradiction) and by dropping CIs and sample sizes
+# (see docs/knowledge/evaluation.md). v2 asks to keep the source's polarity and wording and
+# the numbers that qualify a result.
+SYSTEM_PROMPT_V2 = SYSTEM_PROMPT.replace(
+    "- text: one self-contained statement. Resolve pronouns and abbreviations from the context, and keep \
+the qualifiers that change whether it is true (population, dose, duration, study design, conditions). \
+One fact per statement: split sentences that combine several.",
+    "- text: one self-contained statement. Resolve pronouns and abbreviations from the context. Stay \
+close to the source's wording and keep its polarity: never turn an affirmative finding into a negated \
+one or the reverse. Keep every qualifier that changes whether it is true or how certain it is: \
+population, dose, duration, study design, conditions, and the numbers that come with a result \
+(effect sizes, confidence intervals, p-values, sample sizes). One fact per statement: split sentences \
+that combine several.")
+assert SYSTEM_PROMPT_V2 != SYSTEM_PROMPT
+
+PROMPTS = {"extract-v1": SYSTEM_PROMPT, "extract-v2": SYSTEM_PROMPT_V2}
+PROMPT_NOTES = {
+    "extract-v1": "baseline",
+    "extract-v2": "keeps the source's polarity and wording, and CIs, p-values, sample sizes",
+}
+
 
 def chunk_text(text: str, max_chars: int) -> list[tuple[int, str]]:
     """Split on paragraph (else sentence) boundaries into chunks of at most max_chars.
@@ -52,20 +74,33 @@ def chunk_text(text: str, max_chars: int) -> list[tuple[int, str]]:
     return chunks
 
 
+# Small local models sometimes answer a factual text with an empty list (the cheapest valid
+# JSON). One retry with this nudge recovers most of them; texts shorter than
+# retry_empty_chars are taken at their word.
+RETRY_NUDGE = ("\n\nThis text contains factual statements (results or background facts). "
+               "Extract them; an empty list is only right for text without any factual claim.")
+
+
 class LLMExtractor:
-    def __init__(self, provider: LLMProvider, grounding_threshold: float = 0.9, max_chars: int = 60000):
+    def __init__(self, provider: LLMProvider, grounding_threshold: float = 0.9, max_chars: int = 60000,
+                 retry_empty_chars: int = 300, prompt: str = PROMPT_VERSION):
+        if prompt not in PROMPTS:
+            raise ValueError(f"unknown extraction prompt '{prompt}' (known: {', '.join(PROMPTS)})")
         self.provider = provider
         self.grounding_threshold = grounding_threshold
         self.max_chars = max_chars
+        self.retry_empty_chars = retry_empty_chars
+        self.prompt = prompt
+        self.system_prompt = PROMPTS[prompt]
 
     def run_info(self) -> RunInfo:
         return RunInfo(
             component="llm_extractor",
             provider=self.provider.name,
             model=self.provider.model,
-            prompt_hash=text_hash(PROMPT_VERSION, SYSTEM_PROMPT),
+            prompt_hash=text_hash(self.prompt, self.system_prompt),
             config={**self.provider.config(), "grounding_threshold": self.grounding_threshold,
-                    "max_chars": self.max_chars},
+                    "max_chars": self.max_chars, "retry_empty_chars": self.retry_empty_chars},
         )
 
     def extract(self, doc: Document) -> list[Statement]:
@@ -73,7 +108,9 @@ class LLMExtractor:
         statements: list[Statement] = []
         for _, chunk in chunk_text(doc.text, self.max_chars):
             user = f"Source: {doc.title}\n\n<text>\n{chunk}\n</text>"
-            out = self.provider.generate(SYSTEM_PROMPT, user, ExtractionOutput)
+            out = self.provider.generate(self.system_prompt, user, ExtractionOutput)
+            if not out.statements and self.retry_empty_chars and len(chunk) >= self.retry_empty_chars:
+                out = self.provider.generate(self.system_prompt, user + RETRY_NUDGE, ExtractionOutput)
             for s in out.statements:
                 m = locate_quote(s.evidence_quote, doc.text, self.grounding_threshold)
                 statements.append(Statement(

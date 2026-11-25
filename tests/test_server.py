@@ -5,7 +5,7 @@ from conftest import FakeProvider
 from fastapi.testclient import TestClient
 from test_scifact_eval import _fake_extract, _fake_verify, _write_fixture
 
-from linked_pubs.models import ExtractionOutput
+from linked_pubs.models import ExtractionOutput, Label, VerifierOutput
 from linked_pubs.server.app import create_app
 from linked_pubs.server.graph import Graph, compile_graph
 
@@ -82,8 +82,47 @@ def test_run_baseline_experiment_through_api(tmp_path):
     assert by_mode["statements"]["summary"]["extraction"]["grounded_rate"] == 1.0
     assert exp["comparisons"][0]["extraction_loss_macro_f1"] == 0.0
     rows = client.get(f"/api/experiments/{exp['id']}/arms/arm1/rows").json()
-    assert {r["pred"] for r in rows} == {"SUPPORT", "NOT_ENOUGH_INFO"}
+    assert {r["pred"] for r in rows["predictions"]} == {"SUPPORT", "NOT_ENOUGH_INFO"}
+    assert rows["predictions"][0]["claim"] == "Fibre lowers LDL cholesterol."
+    assert client.get(f"/api/experiments/{exp['id']}/arms/arm2/rows").json()["statements"][0]["grounded"] is True
     assert [e["name"] for e in client.get("/api/experiments").json()] == ["baseline"]
+
+    # Timings feed the estimate of the next run: extraction is cached now, verification is timed.
+    timings = {r["arm"]: r["timings"] for r in exp["results"]}
+    assert timings["arm2"]["extract"]["calls"] == 2 and timings["arm1"]["verify"]["calls"] == 2
+    est = {e["arm"]: e for e in client.post("/api/compile", json=graph).json()["estimates"]}
+    assert est["arm2"]["extract_calls"] == 0 and est["arm2"]["cached"] == 2
+    assert est["arm1"]["verify_calls"] == 2 and est["arm1"]["seconds"] is not None
+
+    # Both arms agree on every pair here, so the comparison lists nothing.
+    cmp = client.get(f"/api/experiments/{exp['id']}/compare/arm1/arm2").json()
+    assert cmp["counts"]["same"] == 2 and cmp["items"] == []
+
+    board = client.get("/api/leaderboard").json()
+    assert {(r["mode"], r["accuracy"]) for r in board} == {("abstract", 1.0), ("statements", 1.0)}
+
+
+def test_compare_lists_pairs_lost_by_extraction(tmp_path):
+    client = _client(tmp_path)
+
+    def verify_abstract_only(s, u, schema):
+        # Right on the raw abstract, wrong ("not enough info") on extracted statements.
+        if schema is ExtractionOutput:
+            return _fake_extract(s, u, schema)
+        if "We studied adults." in u:
+            return _fake_verify(s, u, schema)
+        return VerifierOutput(explanation="statements too vague", label=Label.NEI, evidence_ids=[])
+
+    client.app.state.runner.provider_factory = lambda spec: FakeProvider(verify_abstract_only)
+    graph = _graph(*BASELINE, data=MODELS).model_dump()
+    exp = _wait(client, client.post("/api/experiments", json={"graph": graph}).json()["id"])
+    cmp = client.get(f"/api/experiments/{exp['id']}/compare/arm1/arm2").json()
+    assert cmp["counts"]["lost"] == 1
+    item = cmp["items"][0]
+    assert item["kind"] == "lost" and item["claim"] == "Fibre lowers LDL cholesterol."
+    assert item["gold_evidence"] == ["Fibre intake lowered LDL cholesterol."]
+    assert item["gold_evidence_quoted"] is True
+    assert item["statements"][0]["text"].startswith("Fibre intake lowered")
 
 
 def test_paid_model_rejected_by_api(tmp_path):
@@ -126,4 +165,18 @@ def test_upload_pdf_and_run_extraction_arm(tmp_path):
     assert exp["status"] == "done", exp
     assert exp["results"][0]["summary"]["extraction"]["statements"] == 1
     rows = client.get(f"/api/experiments/{exp['id']}/arms/arm1/rows").json()
-    assert rows[0]["grounded"] is True
+    assert rows["statements"][0]["grounded"] is True and rows["predictions"] == []
+
+
+def test_two_extraction_prompts_are_two_arms_with_separate_caches(tmp_path):
+    client = _client(tmp_path)
+    data = dict(MODELS, x2={"model": "ollama:fake", "prompt": "extract-v2"})
+    graph = _graph([("d", "dataset"), ("x", "extractor"), ("v", "verifier"), ("m", "metrics")],
+                   [("d", "dataset"), ("x2", "extractor"), ("v", "verifier"), ("m", "metrics")], data=data)
+    r = compile_graph(graph)
+    assert r.errors == [] and [a.extractor_prompt for a in r.arms] == ["extract-v1", "extract-v2"]
+    est = client.post("/api/compile", json=graph.model_dump()).json()["estimates"]
+    assert [e["extract_calls"] for e in est] == [2, 2]  # different prompts share no cache
+    assert {p["id"] for p in client.get("/api/prompts").json()} >= {"extract-v1", "extract-v2"}
+    bad = _graph(BASELINE[1], data=dict(MODELS, x={"model": "ollama:fake", "prompt": "nope"}))
+    assert any("unknown prompt" in e for e in compile_graph(bad).errors)

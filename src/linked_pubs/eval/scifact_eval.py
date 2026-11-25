@@ -139,6 +139,7 @@ def extraction_stats(pairs: list[Pair], corpus: dict[str, Document], store: Stat
                for p in with_gold]
     return {
         "documents": len(doc_ids),
+        "empty_documents": sum(1 for d in doc_ids if not store.by_doc[d]),
         "statements": len(all_stmts),
         "grounded_rate": round(len(grounded) / len(all_stmts), 4) if all_stmts else 0.0,
         # None when no pair has gold evidence (all NEI): nothing to cover.
@@ -157,7 +158,8 @@ def write_run(out_dir: Path, summaries: list[dict], preds: dict[str, list[Predic
         with (out_dir / f"predictions_{mode}.jsonl").open("w", encoding="utf-8") as f:
             for p in ps:
                 f.write(json.dumps({
-                    "claim_id": p.pair.claim_id, "doc_id": p.pair.doc_id, "gold": p.pair.gold.value,
+                    "claim_id": p.pair.claim_id, "doc_id": p.pair.doc_id, "claim": p.pair.claim,
+                    "gold": p.pair.gold.value,
                     "pred": p.label.value if p.label else None, "gold_rationale": sorted(p.pair.rationale),
                     "pred_rationale": sorted(p.rationale), "explanation": p.explanation, "error": p.error,
                 }) + "\n")

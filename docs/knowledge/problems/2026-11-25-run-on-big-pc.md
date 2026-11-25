@@ -18,5 +18,9 @@ its OS, and whether Ollama runs there.
   stay in the ssh config, not in this repo.
 - 2026-11-25: models worth trying on 16 GB VRAM: qwen3:14b (~9 GB), gemma4:12b (~8 GB);
   bigger ones (~20 GB+) spill into system RAM and get much slower.
+- 2026-11-25: `scripts/setup.ps1` (Windows) and `scripts/setup.sh` (Linux) do the whole setup
+  and print the start and tunnel commands. Still needed from mick: OS of the big PC, ssh alias.
+- 2026-11-25: if Ollama on the big PC has OLLAMA_HOST=0.0.0.0 (so other PCs can reach it), the
+  app still connects via 127.0.0.1 (normalised in `ollama_base_url()`).
 
 ## Fix

@@ -17,6 +17,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from ..extract.llm_extractor import PROMPTS
+
 NodeType = Literal["dataset", "documents", "extractor", "verifier", "metrics"]
 PAID_PROVIDERS = ("anthropic",)
 
@@ -46,7 +48,9 @@ class DataSpec(BaseModel):
 
     def label(self) -> str:
         if self.kind == "scifact":
-            return f"SciFact {self.split}" + (f" ({self.limit} claims)" if self.limit else " (all)")
+            if not self.limit:
+                return f"SciFact {self.split} (all claims)"
+            return f"SciFact {self.split} ({self.limit} claim{'' if self.limit == 1 else 's'})"
         return f"documents {self.docset_id}"
 
 
@@ -55,13 +59,15 @@ class Arm(BaseModel):
     data: DataSpec
     mode: Literal["abstract", "statements", "extraction"]
     extractor: str | None = None
+    extractor_prompt: str = "extract-v1"
     verifier: str | None = None
     path: list[str]
 
     def label(self) -> str:
         parts = [self.data.label()]
         if self.extractor:
-            parts.append(f"extract {self.extractor}")
+            prompt = "" if self.extractor_prompt == "extract-v1" else f" ({self.extractor_prompt})"
+            parts.append(f"extract {self.extractor}{prompt}")
         if self.verifier:
             parts.append(f"verify {self.verifier}")
         return " → ".join(parts)
@@ -118,6 +124,7 @@ def compile_graph(graph: Graph, allow_paid: bool = False) -> CompileResult:
             errors.append(str(e))
             continue
         extractor = verifier = None
+        prompt = "extract-v1"
         for i in path[1:-1]:
             node = nodes[i]
             model = (node.data.get("model") or "").strip()
@@ -129,15 +136,19 @@ def compile_graph(graph: Graph, allow_paid: bool = False) -> CompileResult:
                 break
             if node.type == "extractor":
                 extractor = model
+                prompt = node.data.get("prompt") or "extract-v1"
+                if prompt not in PROMPTS:
+                    errors.append(f"extractor block has an unknown prompt '{prompt}'")
+                    break
             else:
                 verifier = model
         else:
-            key = (data.model_dump_json(), mode, extractor, verifier)
+            key = (data.model_dump_json(), mode, extractor, prompt, verifier)
             if key in seen:
                 continue
             seen.add(key)
             arms.append(Arm(id=f"arm{len(arms) + 1}", data=data, mode=mode, extractor=extractor,
-                            verifier=verifier, path=path))
+                            extractor_prompt=prompt, verifier=verifier, path=path))
 
     connected = {i for p in paths for i in p}
     for n in graph.nodes:

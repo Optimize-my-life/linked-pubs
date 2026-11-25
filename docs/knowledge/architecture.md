@@ -67,5 +67,9 @@ Experiment builder (2026-11-25): `linked-pubs serve` starts a FastAPI app (`serv
 serves the React Flow UI (`web/`). The canvas graph is compiled into arms (`server/graph.py`,
 one per path from a data block to a metrics block) and run one experiment at a time by a
 background thread (`server/runner.py`), stored in `data/experiments/<id>/`. Dropped PDFs
-become document sets in `data/docsets/` (text via pypdf; a proper parser comes later). `run_id` = hash of component,
+become document sets in `data/docsets/` (text via pypdf; a proper parser comes later).
+Each arm records seconds per model call by step and model (`timings`), which the plan uses to
+estimate time on that machine. `/api/experiments/{id}/compare/{a}/{s}` lists the pairs where an
+abstract arm and a statements arm disagree; `/api/leaderboard` lists all finished arms. The
+explanatory texts of the UI live in `web/src/explain.ts` (tested in `explain.test.ts`). `run_id` = hash of component,
 provider, model, prompt hash and config, so any change to these starts a fresh cache.

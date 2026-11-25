@@ -11,7 +11,14 @@ No database yet.
 
 ## Setup
 
-Needs Python 3.11+.
+One step on a new PC (Windows; `scripts/setup.sh` on Linux): checks tools, creates the venv,
+runs the tests, builds the UI, downloads SciFact and pulls models.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
+```
+
+By hand: needs Python 3.11+.
 
 ```powershell
 py -3.11 -m venv .venv
@@ -20,7 +27,7 @@ py -3.11 -m venv .venv
 ```
 
 By default everything runs for free on a local model through any OpenAI-compatible endpoint
-(Ollama by default at `http://localhost:11434/v1`; override with `LINKED_PUBS_OPENAI_BASE_URL`):
+(Ollama by default at `http://127.0.0.1:11434/v1`; override with `LINKED_PUBS_OPENAI_BASE_URL`):
 
 ```powershell
 winget install Ollama.Ollama
@@ -72,8 +79,15 @@ from the laptop through an SSH tunnel:
 ssh -N -L 8000:127.0.0.1:8000 <host-alias>  # then open http://localhost:8000
 ```
 
+What the UI shows: in the Plan tab, what each arm does, how many model calls it needs and
+how long it will take (measured from earlier runs on that machine). While running: the
+current step and time left in the header, and the working block pulses on the canvas.
+Results: plain verdicts, scores on the blocks, "Why?" (pairs that extraction lost, with the
+claim, gold evidence and the statements the verifier saw) and a Compare tab across runs.
+
 UI development: `linked-pubs serve` plus `npm run dev` in `web/` (http://localhost:5173,
-proxies `/api`). Paid APIs only with `LINKED_PUBS_ALLOW_PAID=1`. Ollama elsewhere: set
+proxies `/api`). UI tests: `npm test`; screenshots: `node scripts/screenshot.mjs` (needs
+`npx playwright install chromium` once). Paid APIs only with `LINKED_PUBS_ALLOW_PAID=1`. Ollama elsewhere: set
 `OLLAMA_HOST`.
 
 ## Layout

@@ -1,13 +1,13 @@
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
 import { createContext, useContext, useState, type DragEvent, type ReactNode } from "react";
-import { api, type ModelInfo } from "./api";
+import { api, type ModelInfo, type PromptInfo } from "./api";
 
 export type BlockType = "dataset" | "documents" | "extractor" | "verifier" | "metrics";
 
 export const BLOCKS: Record<BlockType, { title: string; hint: string; defaults: Record<string, unknown> }> = {
   dataset: { title: "SciFact", hint: "claims + abstracts with gold labels", defaults: { split: "dev", limit: 20 } },
   documents: { title: "Documents", hint: "drop PDFs here", defaults: {} },
-  extractor: { title: "Extractor", hint: "text → typed statements", defaults: { model: "" } },
+  extractor: { title: "Extractor", hint: "text → typed statements", defaults: { model: "", prompt: "extract-v1" } },
   verifier: { title: "Verifier", hint: "claim + evidence → label", defaults: { model: "" } },
   metrics: { title: "Metrics", hint: "scores every path ending here", defaults: {} },
 };
@@ -21,17 +21,22 @@ export const ALLOWED: Record<BlockType, BlockType[]> = {
   metrics: [],
 };
 
-type Ctx = { models: ModelInfo[]; defaultModel: string };
-export const ModelsContext = createContext<Ctx>({ models: [], defaultModel: "" });
+type Ctx = { models: ModelInfo[]; defaultModel: string; prompts: PromptInfo[] };
+export const ModelsContext = createContext<Ctx>({ models: [], defaultModel: "", prompts: [] });
 
-function Shell({ type, children, inputs = true, outputs = true }: {
-  type: BlockType; children?: ReactNode; inputs?: boolean; outputs?: boolean;
+function Shell({ type, data, children, inputs = true, outputs = true }: {
+  type: BlockType; data?: Record<string, unknown>; children?: ReactNode; inputs?: boolean; outputs?: boolean;
 }) {
+  // _badges: results of the selected experiment for this block (set by the canvas, not saved).
+  const badges = (data?._badges as string[] | undefined) ?? [];
   return (
     <div className={`block block-${type}`}>
       {inputs && <Handle type="target" position={Position.Left} />}
       <div className="block-title">{BLOCKS[type].title}</div>
-      <div className="block-body">{children}</div>
+      <div className="block-body">
+        {children}
+        {badges.map((b) => <div key={b} className="badge">{b}</div>)}
+      </div>
       {outputs && <Handle type="source" position={Position.Right} />}
     </div>
   );
@@ -61,7 +66,7 @@ export function DatasetNode({ id, data }: NodeProps) {
   const { updateNodeData } = useReactFlow();
   const d = data as { split: string; limit: number };
   return (
-    <Shell type="dataset" inputs={false}>
+    <Shell type="dataset" data={data} inputs={false}>
       <label>
         split
         <select className="nodrag" value={d.split} onChange={(e) => updateNodeData(id, { split: e.target.value })}>
@@ -108,7 +113,7 @@ export function DocumentsNode({ id, data }: NodeProps) {
   };
   const docs = d.docs ?? [];
   return (
-    <Shell type="documents" inputs={false}>
+    <Shell type="documents" data={data} inputs={false}>
       <div className={`dropzone nodrag ${over ? "over" : ""}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setOver(true); } }}
         onDragLeave={() => setOver(false)} onDrop={onDrop}>
@@ -121,10 +126,25 @@ export function DocumentsNode({ id, data }: NodeProps) {
   );
 }
 
-export function ExtractorNode({ id, data }: NodeProps) {
+function PromptSelect({ id, value }: { id: string; value: string }) {
+  const { prompts } = useContext(ModelsContext);
+  const { updateNodeData } = useReactFlow();
+  const current = prompts.find((p) => p.id === value);
   return (
-    <Shell type="extractor">
-      <ModelSelect id={id} value={(data as { model: string }).model} />
+    <select className="nodrag" value={value} title={current?.note}
+      onChange={(e) => updateNodeData(id, { prompt: e.target.value })}>
+      {!current && <option value={value}>{value}</option>}
+      {prompts.map((p) => <option key={p.id} value={p.id}>{p.id.replace("extract-", "prompt ")}: {p.note}</option>)}
+    </select>
+  );
+}
+
+export function ExtractorNode({ id, data }: NodeProps) {
+  const d = data as { model: string; prompt?: string };
+  return (
+    <Shell type="extractor" data={data}>
+      <ModelSelect id={id} value={d.model} />
+      <PromptSelect id={id} value={d.prompt ?? "extract-v1"} />
       <div className="muted">statements with verbatim quotes</div>
     </Shell>
   );
@@ -132,16 +152,16 @@ export function ExtractorNode({ id, data }: NodeProps) {
 
 export function VerifierNode({ id, data }: NodeProps) {
   return (
-    <Shell type="verifier">
+    <Shell type="verifier" data={data}>
       <ModelSelect id={id} value={(data as { model: string }).model} />
       <div className="muted">SUPPORT / CONTRADICT / NEI</div>
     </Shell>
   );
 }
 
-export function MetricsNode() {
+export function MetricsNode({ data }: NodeProps) {
   return (
-    <Shell type="metrics" outputs={false}>
+    <Shell type="metrics" data={data} outputs={false}>
       <div className="muted">macro-F1 · rationale F1 · extraction loss · time</div>
     </Shell>
   );

@@ -51,3 +51,18 @@ def test_verifier_without_evidence_is_nei_without_call():
     p = FakeProvider(lambda *a: None)
     assert LLMVerifier(p).verify("claim", []).label == Label.NEI
     assert p.calls == []
+
+
+def test_extractor_retries_once_when_a_long_text_yields_nothing():
+    long_doc = Document(id="d2", title="Iron", text=DOC.text + " " + "Background sentence. " * 20)
+    answers = [ExtractionOutput(statements=[]), ExtractionOutput(statements=[
+        _stmt("The PRI for iron for women is 16 mg/day.", "PRI for iron is 16 mg/day in women")])]
+    p = FakeProvider(lambda s, u, schema: answers.pop(0))
+    stmts = LLMExtractor(p).extract(long_doc)
+    assert len(p.calls) == 2 and "contains factual statements" in p.calls[1]
+    assert len(stmts) == 1
+
+
+def test_extractor_accepts_empty_answer_for_short_text():
+    p = FakeProvider(lambda s, u, schema: ExtractionOutput(statements=[]))
+    assert LLMExtractor(p).extract(DOC) == [] and len(p.calls) == 1

@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from ..llm import make_provider
+from ..llm import make_provider, ollama_base_url
 from .graph import Graph, compile_graph
 from .runner import ProviderFactory, Runner
 
@@ -26,8 +26,7 @@ class ExperimentIn(BaseModel):
 
 
 def ollama_host() -> str:
-    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    return host if host.startswith("http") else "http://" + host
+    return ollama_base_url()
 
 
 def default_provider_factory(spec: str):
@@ -47,7 +46,7 @@ def create_app(data_dir: Path = Path("data"), provider_factory: ProviderFactory 
     @app.get("/api/health")
     def health():
         try:
-            version = httpx.get(f"{ollama_host()}/api/version", timeout=3).json().get("version")
+            version = httpx.get(f"{ollama_host()}/api/version", timeout=8).json().get("version")
         except (httpx.HTTPError, ValueError):
             version = None
         return {"ollama_host": ollama_host(), "ollama_version": version, "allow_paid": allow_paid,
@@ -57,7 +56,7 @@ def create_app(data_dir: Path = Path("data"), provider_factory: ProviderFactory 
     def models():
         out = []
         try:
-            tags = httpx.get(f"{ollama_host()}/api/tags", timeout=5).json().get("models", [])
+            tags = httpx.get(f"{ollama_host()}/api/tags", timeout=8).json().get("models", [])
         except (httpx.HTTPError, ValueError):
             tags = []
         for m in sorted(tags, key=lambda m: m.get("size", 0)):
@@ -70,10 +69,16 @@ def create_app(data_dir: Path = Path("data"), provider_factory: ProviderFactory 
                 out.append({"spec": f"anthropic:{name}", "name": name, "free": False})
         return out
 
+    @app.get("/api/prompts")
+    def prompts():
+        from ..extract.llm_extractor import PROMPT_NOTES, PROMPTS
+        return [{"id": k, "note": PROMPT_NOTES.get(k, ""), "text": v} for k, v in PROMPTS.items()]
+
     @app.post("/api/compile")
     def compile_(graph: Graph):
         result = compile_graph(graph, allow_paid)
-        return {"errors": result.errors,
+        estimates = runner.estimate(result.arms) if result.arms and not result.errors else []
+        return {"errors": result.errors, "estimates": estimates,
                 "arms": [a.model_dump() | {"label": a.label()} for a in result.arms]}
 
     @app.get("/api/experiments")
@@ -108,6 +113,17 @@ def create_app(data_dir: Path = Path("data"), provider_factory: ProviderFactory 
             return runner.predictions(exp_id, arm_id)
         except KeyError:
             raise HTTPException(404, "no such arm")
+
+    @app.get("/api/experiments/{exp_id}/compare/{abstract_arm}/{statements_arm}")
+    def compare(exp_id: str, abstract_arm: str, statements_arm: str):
+        try:
+            return runner.compare(exp_id, abstract_arm, statements_arm)
+        except KeyError:
+            raise HTTPException(404, "no such experiment or arm")
+
+    @app.get("/api/leaderboard")
+    def leaderboard():
+        return runner.leaderboard()
 
     @app.post("/api/docsets")
     def create_docset():

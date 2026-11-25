@@ -82,3 +82,12 @@ feasibility.
   - With statements only, the losses are SUPPORT/CONTRADICT pairs that turn into NEI (5 of 22):
     the statements lose detail the verdict needs, even when they cover the right sentence.
   - Run folder: `data/runs/20261125-144054-scifact-dev/` (local, not committed).
+- 2026-11-25, why extraction loses (same run, "Why?" view): 4 pairs right on abstracts were
+  lost on statements. 2 of them: the extractor returned no statements at all for the abstract;
+  2: the gold evidence was quoted, but the statement changed it. (a) vCJD prevalence: kept
+  "493 per million" but dropped the 95% CI and sample count; the verifier then judged "not
+  enough info" instead of contradict. (b) Stem cells: source "all HSCs segregate their
+  chromosomes randomly" became "do not asymmetrically segregate"; the verifier misread the
+  negation and said contradict. Hypothesis to test next: an extraction prompt that keeps the
+  source's polarity and wording and keeps CIs and sample sizes reduces this loss. Fix for the first kind: retry on empty
+  output (see gotchas). The second kind is the research question proper.

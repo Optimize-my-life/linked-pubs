@@ -7,6 +7,8 @@ export type ModelInfo = {
   quant?: string;
 };
 
+export type PromptInfo = { id: string; note: string; text: string };
+
 export type Health = {
   ollama_host: string;
   ollama_version: string | null;
@@ -24,12 +26,49 @@ export type Arm = {
   mode: "abstract" | "statements" | "extraction";
   data: { kind: "scifact" | "documents"; split: string; limit: number; docset_id: string | null };
   extractor: string | null;
+  extractor_prompt?: string;
   verifier: string | null;
   path: string[];
   label?: string;
 };
 
-export type Compiled = { arms: Arm[]; errors: string[] };
+export type Estimate = {
+  arm: string;
+  pairs?: number;
+  texts?: number;
+  cached?: number;
+  extract_calls?: number;
+  verify_calls?: number;
+  seconds?: number | null;
+  unknown?: string[];
+  error?: string;
+};
+
+export type Compiled = { arms: Arm[]; errors: string[]; estimates?: Estimate[] };
+
+export type Prediction = {
+  claim_id: number; doc_id: string; claim?: string; gold: string; pred: string | null;
+  explanation: string; error: string; gold_rationale: number[]; pred_rationale: number[];
+};
+export type StatementRow = { id: string; source_id: string; text: string; type: string; evidence_quote: string; grounded: boolean };
+export type Rows = { predictions: Prediction[]; statements: StatementRow[] };
+
+export type CompareItem = {
+  kind: "lost" | "gained" | "both_wrong";
+  claim_id: number; doc_id: string; claim: string; title: string;
+  gold: string; abstract_pred: string | null; statements_pred: string | null;
+  abstract_explanation: string; statements_explanation: string;
+  gold_evidence: string[]; gold_evidence_quoted: boolean;
+  statements: { text: string; type: string }[];
+};
+export type Comparison = { counts: Record<"lost" | "gained" | "both_wrong" | "same", number>; items: CompareItem[] };
+
+export type BoardRow = {
+  experiment: string; experiment_name: string; date: string; arm: string; data: string;
+  mode: Arm["mode"]; extractor: string | null; extractor_prompt?: string; verifier: string | null; pairs: number | null;
+  macro_f1: number | null; accuracy: number | null; rationale_f1: number | null;
+  statements: number | null; grounded_rate: number | null; rationale_coverage: number | null; seconds: number | null;
+};
 
 export type Progress = {
   arm: string;
@@ -51,13 +90,14 @@ export type ArmResult = {
   mode: Arm["mode"];
   seconds: number;
   error: string | null;
+  timings?: Record<string, { model: string; calls: number; seconds: number }>;
   summary: null | {
     pairs?: number;
     errors?: number;
     error_messages?: string[];
     label?: { accuracy: number; macro_f1: number; per_class: Record<string, { f1: number }> };
     rationale?: { precision: number; recall: number; f1: number };
-    extraction?: { documents: number; statements: number; grounded_rate: number; rationale_coverage?: number | null };
+    extraction?: { documents: number; empty_documents?: number; statements: number; grounded_rate: number; rationale_coverage?: number | null };
   };
 };
 
@@ -105,12 +145,15 @@ const post = (body: unknown): RequestInit => ({
 export const api = {
   health: () => call<Health>("/api/health"),
   models: () => call<ModelInfo[]>("/api/models"),
+  prompts: () => call<PromptInfo[]>("/api/prompts"),
   compile: (graph: GraphJSON) => call<Compiled>("/api/compile", post(graph)),
   submit: (name: string, graph: GraphJSON) => call<Experiment>("/api/experiments", post({ name, graph })),
   experiments: () => call<ExperimentSummary[]>("/api/experiments"),
   experiment: (id: string) => call<Experiment>(`/api/experiments/${id}`),
   cancel: (id: string) => call<Experiment>(`/api/experiments/${id}/cancel`, { method: "POST" }),
-  rows: (id: string, arm: string) => call<Record<string, unknown>[]>(`/api/experiments/${id}/arms/${arm}/rows`),
+  rows: (id: string, arm: string) => call<Rows>(`/api/experiments/${id}/arms/${arm}/rows`),
+  compare: (id: string, a: string, s: string) => call<Comparison>(`/api/experiments/${id}/compare/${a}/${s}`),
+  leaderboard: () => call<BoardRow[]>("/api/leaderboard"),
   createDocset: () => call<DocsetSummary>("/api/docsets", { method: "POST" }),
   upload: (docset: string, files: File[]) => {
     const form = new FormData();

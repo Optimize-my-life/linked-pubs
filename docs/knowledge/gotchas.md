@@ -18,3 +18,9 @@
   thinking off (`think: false`), which is far slower on CPU.
 - Windows: Python's default file encoding is cp1252, so `Path.write_text(s)` with "→" or other
   non-Latin-1 text raises *after* truncating the file. Always pass `encoding="utf-8"`.
+- Windows: `http://localhost:11434` costs ~2.4 s per request (IPv6 is tried first, Ollama
+  listens on IPv4 only). Use 127.0.0.1; `llm.ollama_base_url()` also maps OLLAMA_HOST values
+  like `0.0.0.0` (Ollama's own listen setting) to a connectable address.
+- qwen3:8b sometimes answers an abstract with no statements at all (2 of 19 in the first
+  baseline, half of the extraction loss). The extractor retries once with a nudge when a text of
+  300+ chars comes back empty (`retry_empty_chars`, part of the run id, so caches stay apart).

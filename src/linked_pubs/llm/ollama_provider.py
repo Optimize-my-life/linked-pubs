@@ -21,7 +21,7 @@ from .base import LLMError, T
 class OllamaProvider:
     name = "ollama"
 
-    def __init__(self, model: str, base_url: str = "http://localhost:11434", num_ctx: int = 16384,
+    def __init__(self, model: str, base_url: str = "http://127.0.0.1:11434", num_ctx: int = 16384,
                  think: bool = False, timeout: float = 1800.0):
         self.model = model
         self.base_url = base_url.rstrip("/")

@@ -55,7 +55,8 @@ def cmd_scifact_eval(args) -> int:
     runs = {"verifier": verifier.run_info().model_dump() | {"run_id": verifier.run_info().run_id}}
     store, errors = None, []
     if "statements" in modes:
-        extractor = LLMExtractor(_provider(args.extract_llm or args.llm, args.effort, args.allow_paid))
+        extractor = LLMExtractor(_provider(args.extract_llm or args.llm, args.effort, args.allow_paid),
+                                 prompt=args.extract_prompt)
         info = extractor.run_info()
         runs["extractor"] = info.model_dump() | {"run_id": info.run_id}
         store = StatementStore(Path(args.cache), info.run_id)
@@ -86,7 +87,7 @@ def cmd_scifact_eval(args) -> int:
 def cmd_extract(args) -> int:
     path = Path(args.file)
     doc = Document(id=path.stem, title=args.title or path.stem, text=path.read_text(encoding="utf-8"))
-    statements = LLMExtractor(_provider(args.llm, args.effort, args.allow_paid)).extract(doc)
+    statements = LLMExtractor(_provider(args.llm, args.effort, args.allow_paid), prompt=args.prompt).extract(doc)
     print(json.dumps([s.model_dump(mode="json") for s in statements], indent=2, ensure_ascii=False))
     return 0
 
@@ -118,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     e.add_argument("--mode", default="both", choices=["abstract", "statements", "both"])
     e.add_argument("--llm", default=DEFAULT_LLM, help="verifier model spec")
     e.add_argument("--extract-llm", default=None, help="extractor model spec (default: --llm)")
+    e.add_argument("--extract-prompt", default="extract-v1", help="extraction prompt version (extract-v1, extract-v2)")
     e.add_argument("--effort", default="high", help="effort for Claude models")
     e.add_argument("--workers", type=int, default=1, help="parallel requests (local models: keep at 1)")
     e.add_argument("--allow-paid", action="store_true", help="allow paid API models (e.g. anthropic:...)")
@@ -131,6 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     x.add_argument("--llm", default=DEFAULT_LLM)
     x.add_argument("--allow-paid", action="store_true", help="allow paid API models")
     x.add_argument("--effort", default="high")
+    x.add_argument("--prompt", default="extract-v1", help="extraction prompt version")
     x.set_defaults(func=cmd_extract)
 
     s = sub.add_parser("serve", help="start the experiment builder web UI")

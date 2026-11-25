@@ -4,9 +4,10 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
-import { api, type Compiled, type Experiment, type ExperimentSummary, type GraphJSON, type Health, type ModelInfo } from "./api";
+import { api, type Compiled, type Experiment, type ExperimentSummary, type GraphJSON, type Health, type ModelInfo, type PromptInfo } from "./api";
 import { ALLOWED, BLOCKS, ModelsContext, nodeTypes, useUpload, type BlockType } from "./nodes";
-import { describeArm, describePlan, describeProgress } from "./explain";
+import { autoName, badgesFor, describeArm, describeEstimate, describePlan, describeProgress, dur, totalSeconds } from "./explain";
+import { Leaderboard } from "./Leaderboard";
 import { Results } from "./Results";
 
 const STORAGE_KEY = "linked-pubs:graph";
@@ -33,7 +34,10 @@ function baseline(model: string): { nodes: Node[]; edges: Edge[] } {
 
 function toGraph(nodes: Node[], edges: Edge[]): GraphJSON {
   return {
-    nodes: nodes.map((n) => ({ id: n.id, type: n.type ?? "", data: n.data, position: n.position })),
+    nodes: nodes.map((n) => ({
+      id: n.id, type: n.type ?? "", position: n.position,
+      data: Object.fromEntries(Object.entries(n.data).filter(([k]) => !k.startsWith("_"))),
+    })),
     edges: edges.map((e) => ({ source: e.source, target: e.target })),
   };
 }
@@ -64,10 +68,12 @@ function Builder() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [prompts, setPrompts] = useState<PromptInfo[]>([]);
+  useEffect(() => { api.prompts().then(setPrompts).catch(() => undefined); }, []);
   const [health, setHealth] = useState<Health | null>(null);
   const [compiled, setCompiled] = useState<Compiled>({ arms: [], errors: [] });
   const [name, setName] = useState("");
-  const [tab, setTab] = useState<"plan" | "runs">("plan");
+  const [tab, setTab] = useState<"plan" | "runs" | "compare">("plan");
   const [runs, setRuns] = useState<ExperimentSummary[]>([]);
   const [selected, setSelected] = useState<Experiment | null>(null);
   const [submitError, setSubmitError] = useState("");
@@ -83,6 +89,12 @@ function Builder() {
     api.models().then(setModels).catch(() => setModels([]));
   }, []);
   useEffect(refreshModels, [refreshModels]);
+  const ollamaUp = !!health?.ollama_version;
+  useEffect(() => {
+    if (ollamaUp) return;
+    const t = setInterval(refreshModels, 15000);
+    return () => clearInterval(t);
+  }, [ollamaUp, refreshModels]);
 
   // Fill empty model fields once the model list is known.
   useEffect(() => {
@@ -111,6 +123,13 @@ function Builder() {
     const t = setInterval(tick, 2500);
     return () => clearInterval(t);
   }, [selectedId, selectedActive]);
+
+  const autoSelected = useRef(false);
+  useEffect(() => {
+    if (autoSelected.current || selected || !runs.length) return;
+    autoSelected.current = true;
+    api.experiment(runs[0].id).then(setSelected).catch(() => undefined);
+  }, [runs, selected]);
 
   const addBlock = useCallback((type: BlockType, position?: { x: number; y: number }) => {
     const id = newId(type);
@@ -146,7 +165,7 @@ function Builder() {
   const run = async () => {
     setSubmitError("");
     try {
-      const exp = await api.submit(name.trim(), graph);
+      const exp = await api.submit(name.trim() || autoName(compiled.arms), graph);
       setSelected(exp);
       setTab("runs");
       api.experiments().then(setRuns);
@@ -174,6 +193,7 @@ function Builder() {
   const freeCount = models.filter((m) => m.free).length;
   const active = runs.find((r) => r.status === "running");
   const queued = runs.filter((r) => r.status === "queued").length;
+  const queuedAhead = queued + (active ? 1 : 0);
   const plan = describePlan(compiled.arms);
 
   // Re-render every few seconds so the time-left estimate stays current.
@@ -187,14 +207,19 @@ function Builder() {
   // Show on the canvas which block is working: highlight it and animate its path.
   const activeNode = active?.progress?.active_node;
   const activePath = active?.progress?.path ?? [];
-  const viewNodes = useMemo(() => nodes.map((n) => (n.id === activeNode ? { ...n, className: "running" } : n)), [nodes, activeNode]);
+  const badges = useMemo(() => (selected ? badgesFor(selected) : {}), [selected]);
+  const viewNodes = useMemo(() => nodes.map((n) => {
+    const b = badges[n.id];
+    const withBadge = b ? { ...n, data: { ...n.data, _badges: b } } : n;
+    return n.id === activeNode ? { ...withBadge, className: "running" } : withBadge;
+  }), [nodes, activeNode, badges]);
   const viewEdges = useMemo(() => edges.map((e) => {
     const i = activePath.indexOf(e.source);
     return i >= 0 && activePath[i + 1] === e.target ? { ...e, animated: true } : e;
   }), [edges, activePath]);
 
   return (
-    <ModelsContext.Provider value={{ models, defaultModel }}>
+    <ModelsContext.Provider value={{ models, defaultModel, prompts }}>
       <div className="app">
         <header>
           <div className="brand">linked-pubs <span>experiment builder</span></div>
@@ -231,7 +256,7 @@ function Builder() {
         </aside>
 
         <main onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
-          <ReactFlow nodes={viewNodes} edges={viewEdges} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
+          <ReactFlow nodes={viewNodes} edges={viewEdges} colorMode="system" nodeTypes={nodeTypes} onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange} onConnect={onConnect} isValidConnection={isValidConnection}
             defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }} fitView deleteKeyCode={["Delete", "Backspace"]}>
             <Background gap={20} />
@@ -244,21 +269,35 @@ function Builder() {
           <div className="tabs">
             <button className={tab === "plan" ? "active" : ""} onClick={() => setTab("plan")}>Plan</button>
             <button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>Runs ({runs.length})</button>
+            <button className={tab === "compare" ? "active" : ""} onClick={() => setTab("compare")}
+              title="All finished arms side by side">Compare</button>
           </div>
 
           {tab === "plan" && (
             <div className="plan">
               <label className="stack">
                 Experiment name
-                <input value={name} placeholder="e.g. qwen3 8b vs 14b" onChange={(e) => setName(e.target.value)} />
+                <input value={name} placeholder={autoName(compiled.arms) || "e.g. qwen3 8b vs 14b"}
+                  onChange={(e) => setName(e.target.value)} />
               </label>
               {plan.headline && <div className="plan-headline">{plan.headline}</div>}
               {compiled.arms.map((a) => (
                 <div key={a.id} className="arm">
                   <b>{a.id}</b> {describeArm(a)}
+                  <div className="muted small">{describeEstimate(compiled.estimates?.find((e) => e.arm === a.id))}</div>
                 </div>
               ))}
               {plan.notes.map((n, i) => <div key={i} className="note small">{n}</div>)}
+              {compiled.arms.length > 0 && !compiled.errors.length && (
+                <div className="small">
+                  {(() => {
+                    const t = totalSeconds(compiled.estimates ?? []);
+                    return t === null
+                      ? "Total time: known after each model has run once on this machine."
+                      : `Total: ~${dur(t)}${queuedAhead ? ` after ${queuedAhead} queued/running experiment(s)` : ""}.`;
+                  })()}
+                </div>
+              )}
               {compiled.errors.map((e, i) => <div key={i} className="error small">{e}</div>)}
               <button className="primary" disabled={!compiled.arms.length || compiled.errors.length > 0} onClick={run}>
                 ▶ Run experiment
@@ -286,6 +325,10 @@ function Builder() {
               ))}
               {selected && <Results exp={selected} onLoadGraph={() => loadGraph(selected)} />}
             </div>
+          )}
+
+          {tab === "compare" && (
+            <Leaderboard onOpen={(id) => api.experiment(id).then((e) => { setSelected(e); setTab("runs"); })} />
           )}
         </aside>
       </div>

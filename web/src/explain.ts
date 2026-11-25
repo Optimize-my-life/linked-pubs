@@ -1,7 +1,69 @@
 // Plain-language explanations shown in the UI. Keep every sentence short: attention is scarce.
-import type { Arm, Experiment, Progress } from "./api";
+import type { Arm, Estimate, Experiment, Progress } from "./api.ts";
 
 export const model = (spec?: string | null) => (spec ?? "").replace(/^ollama:/, "").replace(/^anthropic:/, "");
+
+export const LABEL: Record<string, string> = {
+  SUPPORT: "supports",
+  CONTRADICT: "contradicts",
+  NOT_ENOUGH_INFO: "not enough info",
+};
+
+/** "22 pairs · 19 texts to extract (3 cached) · ~25 min" */
+export function describeEstimate(e?: Estimate): string {
+  if (!e) return "";
+  if (e.error) return e.error;
+  const parts: string[] = [];
+  if (e.pairs) parts.push(`${e.pairs} claim/abstract pairs`);
+  if (e.extract_calls || e.cached) {
+    parts.push(e.extract_calls ? `${e.extract_calls} texts to extract` : "extraction cached");
+    if (e.extract_calls && e.cached) parts[parts.length - 1] += ` (${e.cached} cached)`;
+  }
+  if (e.seconds != null) parts.push(e.seconds ? `~${dur(e.seconds)}` : "instant");
+  else if (e.unknown?.length) parts.push(`time unknown: first run of ${e.unknown.map(model).join(", ")}`);
+  return parts.join(" · ");
+}
+
+/** A readable default name, e.g. "qwen3:8b · 20 SciFact dev claims · abstracts vs statements". */
+export function autoName(arms: Arm[]): string {
+  if (!arms.length) return "";
+  const models = [...new Set(arms.flatMap((a) => [a.extractor, a.verifier]).filter(Boolean).map(model))];
+  const prompts = [...new Set(arms.filter((a) => a.extractor).map((a) => a.extractor_prompt ?? "extract-v1"))];
+  if (prompts.length > 1) models.push(prompts.map((p) => p.replace("extract-", "prompt ")).join(" vs "));
+  const data = [...new Set(arms.map((a) => describeData(a.data)))].join(" + ");
+  const modes = new Set(arms.map((a) => a.mode));
+  const what = modes.has("abstract") && modes.has("statements") ? "abstracts vs statements"
+    : modes.has("statements") ? "statements" : modes.has("abstract") ? "abstracts" : "extraction";
+  return `${models.join(" vs ")} · ${data} · ${what}`;
+}
+
+/** Short result lines per canvas block (by node id) for the selected experiment. */
+export function badgesFor(exp: Experiment): Record<string, string[]> {
+  const out: Record<string, Set<string>> = {};
+  const add = (id: string | undefined, line: string) => { if (id) (out[id] ??= new Set()).add(line); };
+  for (const r of exp.results) {
+    const arm = exp.arms.find((a) => a.id === r.arm);
+    const s = r.summary;
+    if (!arm || !s) continue;
+    if (arm.extractor && s.extraction) {
+      add(arm.path[1], `${s.extraction.statements} statements · ${Math.round(s.extraction.grounded_rate * 100)}% quotes found`);
+    }
+    if (arm.verifier && s.label) {
+      add(arm.path[arm.path.length - 2], `${arm.mode === "abstract" ? "on abstracts" : "on statements"}: macro-F1 ${s.label.macro_f1.toFixed(2)}`);
+    }
+  }
+  for (const c of exp.comparisons) {
+    const arm = exp.arms.find((a) => a.id === c.statements_arm);
+    add(arm?.path[arm.path.length - 1], `extraction ${c.extraction_loss_macro_f1 > 0 ? "loses" : "gains"} ${Math.abs(c.extraction_loss_macro_f1).toFixed(2)}`);
+  }
+  return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v]]));
+}
+
+/** Total time for the plan, or null when some model has never run on this machine. */
+export function totalSeconds(estimates: Estimate[]): number | null {
+  if (!estimates.length || estimates.some((e) => e.seconds == null)) return null;
+  return estimates.reduce((s, e) => s + (e.seconds ?? 0), 0);
+}
 
 const dataOf = (a: Arm) => a.data;
 
@@ -10,8 +72,11 @@ export function describeData(d: Arm["data"]): string {
   return d.limit ? `${d.limit} SciFact ${d.split} claim${d.limit === 1 ? "" : "s"}` : `all SciFact ${d.split} claims`;
 }
 
+/** "prompt v2" for non-default extraction prompts, else "". */
+export const promptTag = (p?: string) => (p && p !== "extract-v1" ? ` (prompt ${p.replace("extract-", "")})` : "");
+
 export function describeArm(a: Arm): string {
-  const x = model(a.extractor), v = model(a.verifier);
+  const x = model(a.extractor) + promptTag(a.extractor_prompt), v = model(a.verifier);
   if (a.mode === "abstract") return `${v} judges each claim against the full abstract.`;
   if (a.mode === "statements") return `${x} extracts statements; ${v} judges claims against those only.`;
   if (dataOf(a).kind === "documents") return `${x} extracts statements from the documents.`;
@@ -30,7 +95,7 @@ export function describePlan(arms: Arm[]): { headline: string; notes: string[] }
     if (a) notes.push(`${a.id} vs ${s.id} shows what extraction loses.`);
   }
   const verifiers = [...new Set(arms.filter((a) => a.verifier).map((a) => model(a.verifier)))];
-  const extractors = [...new Set(arms.filter((a) => a.extractor).map((a) => model(a.extractor)))];
+  const extractors = [...new Set(arms.filter((a) => a.extractor).map((a) => model(a.extractor) + promptTag(a.extractor_prompt)))];
   if (verifiers.length > 1) notes.push(`Compares verifiers: ${verifiers.join(", ")}.`);
   if (extractors.length > 1) notes.push(`Compares extractors: ${extractors.join(", ")}.`);
   return { headline, notes };
@@ -78,7 +143,12 @@ export function describeResults(exp: Experiment): string[] {
       lines.push(`Best ${mode === "abstract" ? "on abstracts" : "on statements"}: ${best.arm} (${model(arm?.verifier)}), ${best.summary!.label!.macro_f1.toFixed(2)}.`);
     }
   }
-  const ex = exp.results.find((r) => typeof r.summary?.extraction?.rationale_coverage === "number")?.summary?.extraction;
+  const exRes = exp.results.find((r) => typeof r.summary?.extraction?.rationale_coverage === "number");
+  const ex = exRes?.summary?.extraction;
+  if (ex?.empty_documents) {
+    const x = exp.arms.find((a) => a.id === exRes?.arm)?.extractor;
+    lines.push(`${model(x)} returned no statements for ${ex.empty_documents} of ${ex.documents} texts.`);
+  }
   if (ex) {
     lines.push(`Statements quote ${Math.round((ex.rationale_coverage ?? 0) * 100)}% of the gold evidence; ${Math.round(ex.grounded_rate * 100)}% of quotes are found in the source.`);
   }
