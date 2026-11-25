@@ -29,12 +29,13 @@ export function autoName(arms: Arm[]): string {
   if (!arms.length) return "";
   const models = [...new Set(arms.flatMap((a) => [a.extractor, a.verifier]).filter(Boolean).map(model))];
   const prompts = [...new Set(arms.filter((a) => a.extractor).map((a) => a.extractor_prompt ?? "extract-v1"))];
-  if (prompts.length > 1) models.push(prompts.map((p) => p.replace("extract-", "prompt ")).join(" vs "));
+  const parts = [models.join(" vs ")];
+  if (prompts.length > 1) parts.push("prompt " + prompts.map((p) => p.replace("extract-", "")).join(" vs "));
   const data = [...new Set(arms.map((a) => describeData(a.data)))].join(" + ");
   const modes = new Set(arms.map((a) => a.mode));
   const what = modes.has("abstract") && modes.has("statements") ? "abstracts vs statements"
     : modes.has("statements") ? "statements" : modes.has("abstract") ? "abstracts" : "extraction";
-  return `${models.join(" vs ")} · ${data} · ${what}`;
+  return [...parts, data, what].join(" · ");
 }
 
 /** Short result lines per canvas block (by node id) for the selected experiment. */

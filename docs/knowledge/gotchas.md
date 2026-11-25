@@ -24,3 +24,5 @@
 - qwen3:8b sometimes answers an abstract with no statements at all (2 of 19 in the first
   baseline, half of the extraction loss). The extractor retries once with a nudge when a text of
   300+ chars comes back empty (`retry_empty_chars`, part of the run id, so caches stay apart).
+- Never edit an extraction prompt that already has results: add a new version in `PROMPTS`.
+  Otherwise one version name stands for two texts, and older results can't be reproduced.

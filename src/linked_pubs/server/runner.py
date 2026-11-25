@@ -272,8 +272,14 @@ class Runner:
                 e = json.loads(p.read_text(encoding="utf-8"))
             except ValueError:
                 continue
+            arms = {a["id"]: a for a in e.get("arms", [])}
             for r in e.get("results", []):
-                for step, t in (r.get("timings") or {}).items():
+                timings = r.get("timings")
+                if timings is None and r.get("mode") == "abstract" and (r.get("summary") or {}).get("pairs"):
+                    # Runs from before timings were recorded: an abstract arm only verifies.
+                    verifier = arms.get(r["arm"], {}).get("verifier")
+                    timings = {"verify": {"model": verifier, "calls": r["summary"]["pairs"], "seconds": r["seconds"]}}
+                for step, t in (timings or {}).items():
                     acc = totals.setdefault((step, t["model"]), [0.0, 0])
                     acc[0] += t["seconds"]
                     acc[1] += t["calls"]
@@ -440,13 +446,14 @@ def auto_name(arms: list[Arm]) -> str:
         return spec.split(":", 1)[1] if spec and ":" in spec else spec
     models = list(dict.fromkeys(short(m) for a in arms for m in (a.extractor, a.verifier) if m))
     prompts = list(dict.fromkeys(a.extractor_prompt for a in arms if a.extractor))
+    parts = [" vs ".join(models)]
     if len(prompts) > 1:
-        models.append(" vs ".join(p.replace("extract-", "prompt ") for p in prompts))
+        parts.append("prompt " + " vs ".join(p.replace("extract-", "") for p in prompts))
     data = " + ".join(dict.fromkeys(a.data.label() for a in arms))
     modes = {a.mode for a in arms}
     what = ("abstracts vs statements" if {"abstract", "statements"} <= modes else
             "statements" if "statements" in modes else "abstracts" if "abstract" in modes else "extraction")
-    return f"{' vs '.join(models)} · {data} · {what}"
+    return " · ".join(parts + [data, what])
 
 
 def _display_name(exp: dict) -> str:

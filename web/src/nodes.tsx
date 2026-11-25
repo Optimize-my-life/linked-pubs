@@ -131,11 +131,14 @@ function PromptSelect({ id, value }: { id: string; value: string }) {
   const { updateNodeData } = useReactFlow();
   const current = prompts.find((p) => p.id === value);
   return (
-    <select className="nodrag" value={value} title={current?.note}
-      onChange={(e) => updateNodeData(id, { prompt: e.target.value })}>
-      {!current && <option value={value}>{value}</option>}
-      {prompts.map((p) => <option key={p.id} value={p.id}>{p.id.replace("extract-", "prompt ")}: {p.note}</option>)}
-    </select>
+    <>
+      <select className="nodrag" value={value} title={current?.note}
+        onChange={(e) => updateNodeData(id, { prompt: e.target.value })}>
+        {!current && <option value={value}>{value}</option>}
+        {prompts.map((p) => <option key={p.id} value={p.id}>{p.id.replace("extract-", "prompt ")}</option>)}
+      </select>
+      {current?.note && <div className="muted">{current.note}</div>}
+    </>
   );
 }
 
@@ -145,7 +148,6 @@ export function ExtractorNode({ id, data }: NodeProps) {
     <Shell type="extractor" data={data}>
       <ModelSelect id={id} value={d.model} />
       <PromptSelect id={id} value={d.prompt ?? "extract-v1"} />
-      <div className="muted">statements with verbatim quotes</div>
     </Shell>
   );
 }

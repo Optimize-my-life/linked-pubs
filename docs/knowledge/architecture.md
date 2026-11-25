@@ -71,5 +71,8 @@ become document sets in `data/docsets/` (text via pypdf; a proper parser comes l
 Each arm records seconds per model call by step and model (`timings`), which the plan uses to
 estimate time on that machine. `/api/experiments/{id}/compare/{a}/{s}` lists the pairs where an
 abstract arm and a statements arm disagree; `/api/leaderboard` lists all finished arms. The
-explanatory texts of the UI live in `web/src/explain.ts` (tested in `explain.test.ts`). `run_id` = hash of component,
+explanatory texts of the UI live in `web/src/explain.ts` (tested in `explain.test.ts`).
+Extraction prompts are versioned in `extract/llm_extractor.py` (`PROMPTS`, `PROMPT_NOTES`); an
+Extractor block (or `--extract-prompt`) picks one. The prompt text is part of the run id, so
+each version has its own statement cache. Add a version instead of editing one that has results. `run_id` = hash of component,
 provider, model, prompt hash and config, so any change to these starts a fresh cache.

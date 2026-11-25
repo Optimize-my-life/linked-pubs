@@ -90,4 +90,4 @@ feasibility.
   chromosomes randomly" became "do not asymmetrically segregate"; the verifier misread the
   negation and said contradict. Hypothesis to test next: an extraction prompt that keeps the
   source's polarity and wording and keeps CIs and sample sizes reduces this loss. Fix for the first kind: retry on empty
-  output (see gotchas). The second kind is the research question proper.
+  output (see gotchas); checked on both abstracts: 0 -> 7 and 0 -> 10 statements, all quotes found. The second kind is the research question proper.

@@ -68,6 +68,7 @@ function Builder() {
   const [nodes, setNodes, onNodesChange] = useNodesState<Node>(initial.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>(initial.edges);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
   useEffect(() => { api.prompts().then(setPrompts).catch(() => undefined); }, []);
   const [health, setHealth] = useState<Health | null>(null);
@@ -86,7 +87,7 @@ function Builder() {
 
   const refreshModels = useCallback(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
-    api.models().then(setModels).catch(() => setModels([]));
+    api.models().then(setModels).catch(() => setModels([])).finally(() => setModelsLoaded(true));
   }, []);
   useEffect(refreshModels, [refreshModels]);
   const ollamaUp = !!health?.ollama_version;
@@ -298,7 +299,9 @@ function Builder() {
                   })()}
                 </div>
               )}
-              {compiled.errors.map((e, i) => <div key={i} className="error small">{e}</div>)}
+              {!modelsLoaded
+                ? <div className="muted small">Loading models from Ollama…</div>
+                : compiled.errors.map((e, i) => <div key={i} className="error small">{e}</div>)}
               <button className="primary" disabled={!compiled.arms.length || compiled.errors.length > 0} onClick={run}>
                 ▶ Run experiment
               </button>
