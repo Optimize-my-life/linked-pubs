@@ -31,8 +31,10 @@ Report every model × layer, plus cost and runtime.
 
 ## Milestone 1: SciFact
 First benchmark to build against: small, standard, covers extract → link → verify.
-- Use the dev split (300 claims) with the **corrected labels** from the BioNLP 2026
-  audit (aclanthology.org/2026.bionlp-1.9). Check whether test labels are public.
+- Use the dev split (300 claims, 340 claim-abstract pairs: 138 SUPPORT, 71 CONTRADICT,
+  131 NOT_ENOUGH_INFO) with the **corrected labels** from the BioNLP 2026 audit
+  (aclanthology.org/2026.bionlp-1.9); corrections not applied yet. The test split has no
+  public labels.
 - SciFact-Open (~500K abstracts) for retrieval at scale.
 - Metrics: label F1 and rationale F1, comparable with published work.
 - **Extraction-loss test**: verify claims against (a) raw abstracts and (b) only our
@@ -41,8 +43,10 @@ First benchmark to build against: small, standard, covers extract → link → v
 - Limits: abstracts only (no PDFs/tables), biomedical not nutrition, no numeric
   constraints, refuted claims are annotator-negated (wording artifacts), possible
   training-data contamination for frontier models. So also report HealthVer.
-- SciFact figures (1,409 claims, 5,183 abstracts, splits) are from memory: verify
-  against Wadden et al. 2020/2022.
+- Checked against the downloaded release: 5,183 abstracts; 809 train / 300 dev / 300 test claims.
+- Implemented (milestone 1): `linked-pubs scifact-eval`, oracle-abstract setting (claims judged
+  against the abstracts they cite; retrieval not tested yet). Reports label macro-F1, rationale
+  F1, grounded rate, rationale coverage and the extraction loss (macro-F1 abstract − statements).
 
 ## Open: what "solvability" means (next session)
 Agreed so far:

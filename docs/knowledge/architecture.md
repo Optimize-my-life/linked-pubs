@@ -55,3 +55,11 @@ every statement/relation points to its run.
 Sources (upload, status of processing), statement browser per source with highlighted
 evidence, fact graph view, "check a statement" page, and a review/annotation view that
 produces gold data for evaluating extractors and resolvers.
+
+## Current state (milestone 1, 2026-11-25)
+Implemented as a Python package (`src/linked_pubs/`, see README): typed statements, quote
+grounding, Claude and OpenAI-compatible providers, LLM extractor, LLM verifier, SciFact
+evaluation. No database yet: extracted statements are cached as JSONL per extractor run
+(`data/cache/statements/<run_id>.jsonl`) and results go to `data/runs/`. Postgres, ingest of
+PDFs, linking and the web UI come with later milestones. `run_id` = hash of component,
+provider, model, prompt hash and config, so any change to these starts a fresh cache.
