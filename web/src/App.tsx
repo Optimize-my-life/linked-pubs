@@ -6,6 +6,7 @@ import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { api, type Compiled, type Experiment, type ExperimentSummary, type GraphJSON, type Health, type ModelInfo } from "./api";
 import { ALLOWED, BLOCKS, ModelsContext, nodeTypes, useUpload, type BlockType } from "./nodes";
+import { describeArm, describePlan, describeProgress } from "./explain";
 import { Results } from "./Results";
 
 const STORAGE_KEY = "linked-pubs:graph";
@@ -171,12 +172,37 @@ function Builder() {
   };
 
   const freeCount = models.filter((m) => m.free).length;
+  const active = runs.find((r) => r.status === "running");
+  const queued = runs.filter((r) => r.status === "queued").length;
+  const plan = describePlan(compiled.arms);
+
+  // Re-render every few seconds so the time-left estimate stays current.
+  const [, setClock] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const t = setInterval(() => setClock((c) => c + 1), 5000);
+    return () => clearInterval(t);
+  }, [active]);
+
+  // Show on the canvas which block is working: highlight it and animate its path.
+  const activeNode = active?.progress?.active_node;
+  const activePath = active?.progress?.path ?? [];
+  const viewNodes = useMemo(() => nodes.map((n) => (n.id === activeNode ? { ...n, className: "running" } : n)), [nodes, activeNode]);
+  const viewEdges = useMemo(() => edges.map((e) => {
+    const i = activePath.indexOf(e.source);
+    return i >= 0 && activePath[i + 1] === e.target ? { ...e, animated: true } : e;
+  }), [edges, activePath]);
 
   return (
     <ModelsContext.Provider value={{ models, defaultModel }}>
       <div className="app">
         <header>
           <div className="brand">linked-pubs <span>experiment builder</span></div>
+          <div className={`now ${active ? "busy" : ""}`} onClick={() => active && api.experiment(active.id).then((e) => { setSelected(e); setTab("runs"); })}>
+            {active
+              ? <>▶ <b>{active.name}</b>: {describeProgress(active.progress)}{queued ? ` · ${queued} queued` : ""}</>
+              : "Idle: build an experiment and press Run."}
+          </div>
           <div className="health">
             {health?.ollama_version
               ? <span className="ok">Ollama {health.ollama_version} · {freeCount} model{freeCount === 1 ? "" : "s"}</span>
@@ -198,18 +224,14 @@ function Builder() {
             </div>
           ))}
           <div className="help">
-            <p>Drag blocks onto the canvas and connect them left → right. Every path from a data block to a
-              Metrics block is one arm of the experiment.</p>
-            <p>Several verifier or extractor blocks on the same dataset compare models. A dataset → verifier path
-              next to a dataset → extractor → verifier path with the same verifier gives the extraction loss.</p>
-            <p>Drop PDFs anywhere on the canvas to create a Documents block. Select a block or arrow and press
-              Delete to remove it.</p>
+            <p>Drag blocks in, connect left → right. Each path to Metrics is one arm.</p>
+            <p>Drop PDFs on the canvas to extract from them. Delete removes a selected block.</p>
           </div>
           <button onClick={reset}>Reset to baseline</button>
         </aside>
 
         <main onDragOver={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }} onDrop={onDrop}>
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
+          <ReactFlow nodes={viewNodes} edges={viewEdges} nodeTypes={nodeTypes} onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange} onConnect={onConnect} isValidConnection={isValidConnection}
             defaultEdgeOptions={{ markerEnd: { type: MarkerType.ArrowClosed } }} fitView deleteKeyCode={["Delete", "Backspace"]}>
             <Background gap={20} />
@@ -230,20 +252,19 @@ function Builder() {
                 Experiment name
                 <input value={name} placeholder="e.g. qwen3 8b vs 14b" onChange={(e) => setName(e.target.value)} />
               </label>
-              <div className="section-title">{compiled.arms.length} arm{compiled.arms.length === 1 ? "" : "s"}</div>
+              {plan.headline && <div className="plan-headline">{plan.headline}</div>}
               {compiled.arms.map((a) => (
                 <div key={a.id} className="arm">
-                  <b>{a.id}</b> <span className="tag">{a.mode}</span>
-                  <div className="muted small">{a.label}</div>
+                  <b>{a.id}</b> {describeArm(a)}
                 </div>
               ))}
+              {plan.notes.map((n, i) => <div key={i} className="note small">{n}</div>)}
               {compiled.errors.map((e, i) => <div key={i} className="error small">{e}</div>)}
               <button className="primary" disabled={!compiled.arms.length || compiled.errors.length > 0} onClick={run}>
                 ▶ Run experiment
               </button>
               {submitError && <div className="error small">{submitError}</div>}
-              <div className="muted small">Runs go into one queue: the GPU works on one experiment at a time.
-                Extracted statements are cached, so an extractor that already ran is reused.</div>
+              <div className="muted small">One experiment runs at a time. Extractions already done are reused.</div>
             </div>
           )}
 
@@ -259,7 +280,7 @@ function Builder() {
                   </div>
                   <div className="muted small">
                     {new Date(r.created_at).toLocaleString()} · {r.arms} arm(s)
-                    {r.progress ? ` · arm ${r.progress.arm_index}/${r.progress.arms} ${r.progress.step} ${r.progress.done}/${r.progress.total}` : ""}
+                    {r.progress ? ` · ${describeProgress(r.progress)}` : ""}
                   </div>
                 </div>
               ))}

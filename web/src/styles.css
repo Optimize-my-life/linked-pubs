@@ -135,3 +135,12 @@ main { grid-area: main; position: relative; }
 
 .react-flow { --xy-background-color: var(--bg); }
 .react-flow__minimap { background: var(--panel); }
+
+.now { flex: 1; margin: 0 18px; font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.now.busy { color: var(--text); cursor: pointer; }
+.plan-headline { font-weight: 600; }
+.note { color: var(--accent); }
+.verdict { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; border-left: 3px solid var(--accent); }
+.help-cursor { cursor: help; text-decoration: underline dotted; }
+.react-flow__node.running .block { animation: pulse 1.6s ease-in-out infinite; outline: 2px solid var(--c); }
+@keyframes pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--c) 25%, transparent); } }

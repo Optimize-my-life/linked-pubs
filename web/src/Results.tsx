@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { api, type ArmResult, type Experiment } from "./api";
+import { describeArm, describeProgress, describeResults, dur, METRIC_HELP } from "./explain";
 
-const pct = (x?: number) => (x === undefined ? "–" : `${Math.round(x * 100)}%`);
+const pct = (x?: number | null) => (x === undefined || x === null ? "–" : `${Math.round(x * 100)}%`);
 const num = (x?: number) => (x === undefined ? "–" : x.toFixed(2));
-const dur = (s: number) => (s < 90 ? `${Math.round(s)} s` : s < 5400 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 
 const MODE_LABEL = { abstract: "vs. abstracts", statements: "vs. statements", extraction: "extraction only" };
 
 export function Results({ exp, onLoadGraph }: { exp: Experiment; onLoadGraph: () => void }) {
   const [open, setOpen] = useState<string | null>(null);
   const p = exp.progress;
+  const verdict = describeResults(exp);
   return (
     <div className="results">
       <div className="row between">
@@ -19,9 +20,7 @@ export function Results({ exp, onLoadGraph }: { exp: Experiment; onLoadGraph: ()
       <div className="muted small">{new Date(exp.created_at).toLocaleString()} · {exp.arms.length} arm(s)</div>
       {p && (
         <div className="progress">
-          <div className="small">
-            arm {p.arm_index}/{p.arms} · {p.step} {p.done}/{p.total}
-          </div>
+          <div className="small">{describeProgress(p)}</div>
           <div className="bar"><div style={{ width: `${p.total ? (100 * p.done) / p.total : 0}%` }} /></div>
         </div>
       )}
@@ -33,30 +32,28 @@ export function Results({ exp, onLoadGraph }: { exp: Experiment; onLoadGraph: ()
         )}
       </div>
 
-      {exp.comparisons.length > 0 && (
-        <div className="card">
-          <div className="card-title">Extraction loss (macro-F1 abstracts − statements)</div>
-          {exp.comparisons.map((c) => (
-            <div key={c.statements_arm} className="row between small">
-              <span className="ellipsis">extract {c.extractor} · verify {c.verifier}</span>
-              <b>{c.extraction_loss_macro_f1 >= 0 ? "−" : "+"}{Math.abs(c.extraction_loss_macro_f1).toFixed(2)}</b>
-            </div>
-          ))}
+      {verdict.length > 0 && (
+        <div className="card verdict">
+          {verdict.map((line, i) => <div key={i}>{line}</div>)}
         </div>
       )}
 
       <table className="table">
         <thead>
-          <tr><th>arm</th><th>macro-F1</th><th>acc</th><th>rat. F1</th><th>stmts</th><th>quote ok</th><th>cover</th><th>time</th></tr>
+          <tr>
+            <th>arm</th>
+            {Object.entries(METRIC_HELP).map(([k, help]) => <th key={k} title={help} className="help-cursor">{k}</th>)}
+          </tr>
         </thead>
         <tbody>
           {exp.arms.map((arm) => {
             const r = exp.results.find((x) => x.arm === arm.id);
-            return <ArmRow key={arm.id} armId={arm.id} label={r?.label ?? arm.label ?? arm.id} mode={arm.mode} r={r}
+            return <ArmRow key={arm.id} armId={arm.id} label={describeArm(arm)} mode={arm.mode} r={r}
               onToggle={() => setOpen(open === arm.id ? null : arm.id)} />;
           })}
         </tbody>
       </table>
+      <div className="muted small">Hover a column for its meaning. Click an arm for its rows.</div>
       {open && <Rows expId={exp.id} armId={open} key={open} />}
     </div>
   );

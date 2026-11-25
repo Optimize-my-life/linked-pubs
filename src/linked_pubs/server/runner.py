@@ -181,10 +181,14 @@ class Runner:
 
     def _run_arm(self, exp_id: str, index: int, n_arms: int, arm: Arm, cancelled: threading.Event) -> dict:
         out_dir = self.root / exp_id / arm.id
-        progress = {"arm": arm.id, "arm_index": index + 1, "arms": n_arms, "step": "", "done": 0, "total": 0}
+        progress = {"arm": arm.id, "arm_index": index + 1, "arms": n_arms, "mode": arm.mode, "step": "",
+                    "done": 0, "total": 0, "model": None, "active_node": None, "path": arm.path, "step_started": None}
 
         def step(name: str, total: int) -> None:
-            progress.update(step=name, done=0, total=total)
+            # The UI shows which block is working and estimates the time left from step_started.
+            model = arm.extractor if name == "extract" else arm.verifier
+            active = arm.path[1] if name == "extract" else arm.path[-2]
+            progress.update(step=name, done=0, total=total, model=model, active_node=active, step_started=time.time())
             self._update(exp_id, progress=dict(progress))
 
         def tick() -> None:

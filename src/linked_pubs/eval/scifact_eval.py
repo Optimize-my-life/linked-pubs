@@ -141,7 +141,8 @@ def extraction_stats(pairs: list[Pair], corpus: dict[str, Document], store: Stat
         "documents": len(doc_ids),
         "statements": len(all_stmts),
         "grounded_rate": round(len(grounded) / len(all_stmts), 4) if all_stmts else 0.0,
-        "rationale_coverage": set_metrics(gold, covered)["recall"],
+        # None when no pair has gold evidence (all NEI): nothing to cover.
+        "rationale_coverage": set_metrics(gold, covered)["recall"] if gold else None,
     }
 
 

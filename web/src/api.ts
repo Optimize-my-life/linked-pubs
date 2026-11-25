@@ -22,6 +22,7 @@ export type GraphJSON = {
 export type Arm = {
   id: string;
   mode: "abstract" | "statements" | "extraction";
+  data: { kind: "scifact" | "documents"; split: string; limit: number; docset_id: string | null };
   extractor: string | null;
   verifier: string | null;
   path: string[];
@@ -34,9 +35,14 @@ export type Progress = {
   arm: string;
   arm_index: number;
   arms: number;
-  step: string;
+  mode: "abstract" | "statements" | "extraction";
+  step: "extract" | "verify" | "";
   done: number;
   total: number;
+  model: string | null;
+  active_node: string | null;
+  path: string[];
+  step_started: number | null;
 } | null;
 
 export type ArmResult = {
@@ -51,7 +57,7 @@ export type ArmResult = {
     error_messages?: string[];
     label?: { accuracy: number; macro_f1: number; per_class: Record<string, { f1: number }> };
     rationale?: { precision: number; recall: number; f1: number };
-    extraction?: { documents: number; statements: number; grounded_rate: number; rationale_coverage?: number };
+    extraction?: { documents: number; statements: number; grounded_rate: number; rationale_coverage?: number | null };
   };
 };
 
