@@ -13,8 +13,18 @@ from .models import Document
 from .resolve import LLMVerifier
 
 
-def _provider(spec: str, effort: str):
-    kwargs = {"effort": effort} if spec.startswith("anthropic") else {}
+# Free local model by default (Ollama). Paid APIs need --allow-paid, so a set API key
+# never spends money by accident.
+DEFAULT_LLM = "ollama:qwen3:8b"
+PAID_PROVIDERS = ("anthropic",)
+
+
+def _provider(spec: str, effort: str, allow_paid: bool = False):
+    paid = spec.split(":", 1)[0] in PAID_PROVIDERS
+    if paid and not allow_paid:
+        raise SystemExit(f"'{spec}' is a paid API. Pass --allow-paid to use it, "
+                         f"or use a local model (default {DEFAULT_LLM}).")
+    kwargs = {"effort": effort} if paid else {}
     return make_provider(spec, **kwargs)
 
 
@@ -40,12 +50,12 @@ def cmd_scifact_eval(args) -> int:
         print("No labelled claim/abstract pairs (test split has no public labels?).", file=sys.stderr)
         return 1
 
-    verifier = LLMVerifier(_provider(args.llm, args.effort))
+    verifier = LLMVerifier(_provider(args.llm, args.effort, args.allow_paid))
     modes = ["abstract", "statements"] if args.mode == "both" else [args.mode]
     runs = {"verifier": verifier.run_info().model_dump() | {"run_id": verifier.run_info().run_id}}
     store, errors = None, []
     if "statements" in modes:
-        extractor = LLMExtractor(_provider(args.extract_llm or args.llm, args.effort))
+        extractor = LLMExtractor(_provider(args.extract_llm or args.llm, args.effort, args.allow_paid))
         info = extractor.run_info()
         runs["extractor"] = info.model_dump() | {"run_id": info.run_id}
         store = StatementStore(Path(args.cache), info.run_id)
@@ -76,7 +86,7 @@ def cmd_scifact_eval(args) -> int:
 def cmd_extract(args) -> int:
     path = Path(args.file)
     doc = Document(id=path.stem, title=args.title or path.stem, text=path.read_text(encoding="utf-8"))
-    statements = LLMExtractor(_provider(args.llm, args.effort)).extract(doc)
+    statements = LLMExtractor(_provider(args.llm, args.effort, args.allow_paid)).extract(doc)
     print(json.dumps([s.model_dump(mode="json") for s in statements], indent=2, ensure_ascii=False))
     return 0
 
@@ -92,12 +102,13 @@ def main(argv: list[str] | None = None) -> int:
     e = sub.add_parser("scifact-eval", help="evaluate verification on SciFact (abstracts vs. statements)")
     e.add_argument("--data", default="data/scifact")
     e.add_argument("--split", default="dev", choices=["train", "dev", "test"])
-    e.add_argument("--limit", type=int, default=20, help="number of claims (0 = all); each costs API calls")
+    e.add_argument("--limit", type=int, default=20, help="number of claims (0 = all)")
     e.add_argument("--mode", default="both", choices=["abstract", "statements", "both"])
-    e.add_argument("--llm", default="anthropic:claude-opus-5-5", help="verifier model spec")
+    e.add_argument("--llm", default=DEFAULT_LLM, help="verifier model spec")
     e.add_argument("--extract-llm", default=None, help="extractor model spec (default: --llm)")
     e.add_argument("--effort", default="high", help="effort for Claude models")
-    e.add_argument("--workers", type=int, default=4)
+    e.add_argument("--workers", type=int, default=1, help="parallel requests (local models: keep at 1)")
+    e.add_argument("--allow-paid", action="store_true", help="allow paid API models (e.g. anthropic:...)")
     e.add_argument("--cache", default="data/cache")
     e.add_argument("--out", default="data/runs")
     e.set_defaults(func=cmd_scifact_eval)
@@ -105,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
     x = sub.add_parser("extract", help="extract statements from a text file")
     x.add_argument("file")
     x.add_argument("--title", default=None)
-    x.add_argument("--llm", default="anthropic:claude-opus-5-5")
+    x.add_argument("--llm", default=DEFAULT_LLM)
+    x.add_argument("--allow-paid", action="store_true", help="allow paid API models")
     x.add_argument("--effort", default="high")
     x.set_defaults(func=cmd_extract)
 

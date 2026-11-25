@@ -18,9 +18,15 @@ py -3.11 -m venv .venv
 .venv\Scripts\python -m pytest
 ```
 
-Claude models need credentials in the environment (`ANTHROPIC_API_KEY`). Local models run
-through any OpenAI-compatible endpoint (Ollama by default at `http://localhost:11434/v1`;
-override with `LINKED_PUBS_OPENAI_BASE_URL`).
+By default everything runs for free on a local model through any OpenAI-compatible endpoint
+(Ollama by default at `http://localhost:11434/v1`; override with `LINKED_PUBS_OPENAI_BASE_URL`):
+
+```powershell
+winget install Ollama.Ollama
+ollama pull qwen3:8b
+```
+
+Paid Claude models are off unless you pass `--allow-paid` (and set `ANTHROPIC_API_KEY`).
 
 ## Use
 
@@ -28,14 +34,17 @@ override with `LINKED_PUBS_OPENAI_BASE_URL`).
 # Download SciFact (data/scifact, not committed)
 .venv\Scripts\linked-pubs scifact-download
 
-# Verify claims against raw abstracts and against extracted statements (costs API calls)
-.venv\Scripts\linked-pubs scifact-eval --limit 20 --mode both --llm anthropic:claude-opus-5-5
+# Verify claims against raw abstracts and against extracted statements (local model, free)
+.venv\Scripts\linked-pubs scifact-eval --limit 20 --mode both
 
-# Same with a local model for extraction
-.venv\Scripts\linked-pubs scifact-eval --limit 20 --extract-llm openai_compat:qwen3:8b
+# Another local model
+.venv\Scripts\linked-pubs scifact-eval --limit 20 --llm ollama:gemma3:12b
+
+# Claude (paid, only with --allow-paid)
+.venv\Scripts\linked-pubs scifact-eval --limit 20 --llm anthropic:claude-opus-5-5 --allow-paid
 
 # Extract statements from a text file
-.venv\Scripts\linked-pubs extract notes.txt --llm anthropic:claude-opus-5-5
+.venv\Scripts\linked-pubs extract notes.txt
 ```
 
 Model specs: `anthropic:<model>` or `openai_compat:<model>`. `--effort` sets the effort
