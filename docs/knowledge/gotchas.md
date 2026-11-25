@@ -16,3 +16,5 @@
   and the OpenAI endpoint can't raise it, so prompt + abstract get silently truncated (the
   first test returned zero statements). The native provider sets `num_ctx` (16384) and turns
   thinking off (`think: false`), which is far slower on CPU.
+- Windows: Python's default file encoding is cp1252, so `Path.write_text(s)` with "→" or other
+  non-Latin-1 text raises *after* truncating the file. Always pass `encoding="utf-8"`.

@@ -91,6 +91,18 @@ def cmd_extract(args) -> int:
     return 0
 
 
+def cmd_serve(args) -> int:
+    import uvicorn
+
+    from .server.app import create_app
+
+    if args.host not in ("127.0.0.1", "localhost"):
+        print(f"Warning: the UI has no login; binding to {args.host} exposes it on the network. "
+              "Prefer 127.0.0.1 plus an SSH tunnel.", file=sys.stderr)
+    uvicorn.run(create_app(Path(args.data)), host=args.host, port=args.port)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="linked-pubs")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -120,6 +132,12 @@ def main(argv: list[str] | None = None) -> int:
     x.add_argument("--allow-paid", action="store_true", help="allow paid API models")
     x.add_argument("--effort", default="high")
     x.set_defaults(func=cmd_extract)
+
+    s = sub.add_parser("serve", help="start the experiment builder web UI")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8000)
+    s.add_argument("--data", default="data", help="data folder (SciFact, cache, experiments, uploads)")
+    s.set_defaults(func=cmd_serve)
 
     args = p.parse_args(argv)
     return args.func(args)

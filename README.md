@@ -6,7 +6,8 @@ turn them into inputs for optimisation models. Background, hypotheses and the ev
 plan are in [docs/knowledge/](docs/knowledge/INDEX.md).
 
 Status: milestone 1. Pluggable LLM providers, statement extraction with a quote check,
-claim verification, and the SciFact evaluation harness. No database or web UI yet.
+claim verification, the SciFact evaluation harness, and a visual experiment builder (web UI).
+No database yet.
 
 ## Setup
 
@@ -52,6 +53,29 @@ level for Claude models (default `high`). Each run writes `summary.json` and per
 predictions to `data/runs/<timestamp>-scifact-<split>/`. Extracted statements are cached per
 extractor configuration in `data/cache/statements/`, so reruns don't pay for extraction again.
 
+## Experiment builder (web UI)
+
+Drag blocks onto a canvas and connect them: SciFact dataset or dropped PDFs → extractor →
+verifier → metrics. Each path to a metrics block is one arm; several model blocks compare
+models; an abstract path plus a statements path with the same verifier gives the extraction
+loss. Runs queue up (one at a time), show progress, and keep their results.
+
+```powershell
+cd web; npm ci; npm run build; cd ..     # once, and after UI changes
+.venv\Scripts\linked-pubs serve           # http://127.0.0.1:8000
+```
+
+The server has no login and binds to 127.0.0.1. To use the GPU PC, run it there and open it
+from the laptop through an SSH tunnel:
+
+```powershell
+ssh -N -L 8000:127.0.0.1:8000 <host-alias>  # then open http://localhost:8000
+```
+
+UI development: `linked-pubs serve` plus `npm run dev` in `web/` (http://localhost:5173,
+proxies `/api`). Paid APIs only with `LINKED_PUBS_ALLOW_PAID=1`. Ollama elsewhere: set
+`OLLAMA_HOST`.
+
 ## Layout
 
 | Path | What |
@@ -63,3 +87,5 @@ extractor configuration in `data/cache/statements/`, so reruns don't pay for ext
 | `src/linked_pubs/resolve/` | Verifier interface and LLM verifier |
 | `src/linked_pubs/data/scifact.py` | SciFact download and loaders |
 | `src/linked_pubs/eval/` | Metrics and the SciFact evaluation |
+| `src/linked_pubs/server/` | Web API: graph → arms, experiment runner, PDF uploads |
+| `web/` | Experiment builder UI (React, React Flow) |

@@ -61,5 +61,11 @@ Implemented as a Python package (`src/linked_pubs/`, see README): typed statemen
 grounding, Claude and OpenAI-compatible providers, LLM extractor, LLM verifier, SciFact
 evaluation. No database yet: extracted statements are cached as JSONL per extractor run
 (`data/cache/statements/<run_id>.jsonl`) and results go to `data/runs/`. Postgres, ingest of
-PDFs, linking and the web UI come with later milestones. `run_id` = hash of component,
+PDFs, linking and review screens come with later milestones.
+
+Experiment builder (2026-11-25): `linked-pubs serve` starts a FastAPI app (`server/`) that
+serves the React Flow UI (`web/`). The canvas graph is compiled into arms (`server/graph.py`,
+one per path from a data block to a metrics block) and run one experiment at a time by a
+background thread (`server/runner.py`), stored in `data/experiments/<id>/`. Dropped PDFs
+become document sets in `data/docsets/` (text via pypdf; a proper parser comes later). `run_id` = hash of component,
 provider, model, prompt hash and config, so any change to these starts a fresh cache.

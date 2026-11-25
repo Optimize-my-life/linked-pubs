@@ -124,20 +124,25 @@ def summarize(preds: list[Prediction], mode: str, corpus: dict[str, Document],
         "rationale": set_metrics([p.pair.rationale for p in with_evidence], [p.rationale for p in with_evidence]),
     }
     if mode == "statements" and store is not None:
-        doc_ids = {p.pair.doc_id for p in preds if p.pair.doc_id in store.by_doc}
-        all_stmts = [s for d in doc_ids for s in store.by_doc[d]]
-        grounded = [s for s in all_stmts if s.grounded]
-        # Share of gold rationale sentences that some grounded statement quotes from.
-        gold = [p.pair.rationale for p in preds if p.pair.rationale and p.pair.doc_id in store.by_doc]
-        covered = [sentences_covered(corpus[p.pair.doc_id], [s for s in store.by_doc[p.pair.doc_id] if s.grounded])
-                   for p in preds if p.pair.rationale and p.pair.doc_id in store.by_doc]
-        summary["extraction"] = {
-            "documents": len(doc_ids),
-            "statements": len(all_stmts),
-            "grounded_rate": round(len(grounded) / len(all_stmts), 4) if all_stmts else 0.0,
-            "rationale_coverage": set_metrics(gold, covered)["recall"],
-        }
+        summary["extraction"] = extraction_stats([p.pair for p in preds], corpus, store)
     return summary
+
+
+def extraction_stats(pairs: list[Pair], corpus: dict[str, Document], store: StatementStore) -> dict:
+    """Statement counts, quote-check pass rate, and share of gold rationale sentences covered."""
+    doc_ids = {p.doc_id for p in pairs if p.doc_id in store.by_doc}
+    all_stmts = [s for d in doc_ids for s in store.by_doc[d]]
+    grounded = [s for s in all_stmts if s.grounded]
+    with_gold = [p for p in pairs if p.rationale and p.doc_id in store.by_doc]
+    gold = [p.rationale for p in with_gold]
+    covered = [sentences_covered(corpus[p.doc_id], [s for s in store.by_doc[p.doc_id] if s.grounded])
+               for p in with_gold]
+    return {
+        "documents": len(doc_ids),
+        "statements": len(all_stmts),
+        "grounded_rate": round(len(grounded) / len(all_stmts), 4) if all_stmts else 0.0,
+        "rationale_coverage": set_metrics(gold, covered)["recall"],
+    }
 
 
 def write_run(out_dir: Path, summaries: list[dict], preds: dict[str, list[Prediction]], runs: dict) -> None:
