@@ -25,6 +25,16 @@ PDFs ──► Ingest ──► Chunks ──► Extractor(s) ──► Statemen
    statement, then aggregate into supported / contradicted / not enough info, with the
    evidence statements and their source quotes.
 
+## Statement types (nutrition)
+Statements feed optimisation models, so they are typed:
+| Type | Example | Use in model |
+|---|---|---|
+| reference value | PRI iron 16 mg/day, women 19–50 | lower bound (value, unit, population, AR/PRI/AI/UL) |
+| upper limit | UL vitamin D 100 µg/day, adults | upper bound |
+| effect | +10 g fibre/day → −x % CVD risk | objective coefficient / soft constraint (+ study design, evidence grade) |
+| recommendation | free sugars < 10 % of energy | (soft) constraint |
+| food composition | 100 g lentils: 7.5 mg iron | model matrix (prefer databases over PDFs) |
+
 ## Plugin interfaces (sketch)
 - `Parser.parse(pdf) -> Document`
 - `Extractor.extract(chunk, context) -> list[Statement]`
