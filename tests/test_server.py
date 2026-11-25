@@ -180,3 +180,13 @@ def test_two_extraction_prompts_are_two_arms_with_separate_caches(tmp_path):
     assert {p["id"] for p in client.get("/api/prompts").json()} >= {"extract-v1", "extract-v2"}
     bad = _graph(BASELINE[1], data=dict(MODELS, x={"model": "ollama:fake", "prompt": "nope"}))
     assert any("unknown prompt" in e for e in compile_graph(bad).errors)
+
+
+def test_second_server_on_same_data_folder_is_refused(tmp_path):
+    import pytest
+    from linked_pubs.server.runner import DataFolderInUse, Runner
+    first = Runner(tmp_path, tmp_path / "scifact", tmp_path / "cache", _fake_factory)
+    with pytest.raises(DataFolderInUse):
+        Runner(tmp_path, tmp_path / "scifact", tmp_path / "cache", _fake_factory)
+    first._lockfile.close()
+    Runner(tmp_path, tmp_path / "scifact", tmp_path / "cache", _fake_factory)  # free again

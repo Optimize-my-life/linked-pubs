@@ -100,7 +100,14 @@ def cmd_serve(args) -> int:
     if args.host not in ("127.0.0.1", "localhost"):
         print(f"Warning: the UI has no login; binding to {args.host} exposes it on the network. "
               "Prefer 127.0.0.1 plus an SSH tunnel.", file=sys.stderr)
-    uvicorn.run(create_app(Path(args.data)), host=args.host, port=args.port)
+    from .server.runner import DataFolderInUse
+
+    try:
+        app = create_app(Path(args.data))
+    except DataFolderInUse as e:
+        print(f"Not started: {e}", file=sys.stderr)
+        return 1
+    uvicorn.run(app, host=args.host, port=args.port)
     return 0
 
 

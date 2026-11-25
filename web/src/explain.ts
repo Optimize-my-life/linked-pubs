@@ -50,12 +50,18 @@ export function badgesFor(exp: Experiment): Record<string, string[]> {
       add(arm.path[1], `${s.extraction.statements} statements · ${Math.round(s.extraction.grounded_rate * 100)}% quotes found`);
     }
     if (arm.verifier && s.label) {
-      add(arm.path[arm.path.length - 2], `${arm.mode === "abstract" ? "on abstracts" : "on statements"}: macro-F1 ${s.label.macro_f1.toFixed(2)}`);
+      // Several arms of one mode can share a verifier block: name the arm then.
+      const sameMode = exp.arms.filter((a) => a.mode === arm.mode && a.verifier).length > 1;
+      const where = arm.mode === "abstract" ? "on abstracts" : "on statements";
+      add(arm.path[arm.path.length - 2], `${sameMode ? `${arm.id} ` : ""}${where}: macro-F1 ${s.label.macro_f1.toFixed(2)}`);
     }
   }
+  const many = exp.comparisons.length > 1;
   for (const c of exp.comparisons) {
     const arm = exp.arms.find((a) => a.id === c.statements_arm);
-    add(arm?.path[arm.path.length - 1], `extraction ${c.extraction_loss_macro_f1 > 0 ? "loses" : "gains"} ${Math.abs(c.extraction_loss_macro_f1).toFixed(2)}`);
+    const loss = c.extraction_loss_macro_f1;
+    const text = loss > 0 ? `extraction loses ${loss.toFixed(2)}` : loss < 0 ? `extraction gains ${(-loss).toFixed(2)}` : "no extraction loss";
+    add(arm?.path[arm.path.length - 1], many ? `${c.statements_arm}: ${text}` : text);
   }
   return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v]]));
 }
@@ -129,29 +135,56 @@ export function describeProgress(p: Progress, nowSec = Date.now() / 1000): strin
 export function describeResults(exp: Experiment): string[] {
   const lines: string[] = [];
   const res = (id: string) => exp.results.find((r) => r.arm === id)?.summary;
+  const armOf = (id: string) => exp.arms.find((a) => a.id === id);
+  const xName = (a?: Arm) => model(a?.extractor) + promptTag(a?.extractor_prompt);
+  const f = (x: number) => x.toFixed(2);
+
+  // Extraction loss: one sentence per abstract/statements pair of arms. With several pairs,
+  // each sentence names its arm and extractor so they can be told apart.
+  const many = exp.comparisons.length > 1;
   for (const c of exp.comparisons) {
     const a = res(c.abstract_arm)?.label?.macro_f1, s = res(c.statements_arm)?.label?.macro_f1;
     if (a === undefined || s === undefined) continue;
-    lines.push(c.extraction_loss_macro_f1 > 0
-      ? `With statements only, ${model(c.verifier)} scores ${s.toFixed(2)} instead of ${a.toFixed(2)}: extraction by ${model(c.extractor)} loses ${c.extraction_loss_macro_f1.toFixed(2)}.`
-      : `With statements only, ${model(c.verifier)} scores ${s.toFixed(2)}, ${s === a ? "the same as" : "better than"} on full abstracts (${a.toFixed(2)}).`);
-  }
-  for (const mode of ["abstract", "statements"] as const) {
-    const scored = exp.results.filter((r) => r.mode === mode && r.summary?.label);
-    if (scored.length > 1) {
-      const best = scored.reduce((x, y) => (y.summary!.label!.macro_f1 > x.summary!.label!.macro_f1 ? y : x));
-      const arm = exp.arms.find((a) => a.id === best.arm);
-      lines.push(`Best ${mode === "abstract" ? "on abstracts" : "on statements"}: ${best.arm} (${model(arm?.verifier)}), ${best.summary!.label!.macro_f1.toFixed(2)}.`);
+    const loss = c.extraction_loss_macro_f1;
+    if (!many) {
+      lines.push(loss > 0
+        ? `With statements only, ${model(c.verifier)} scores ${f(s)} instead of ${f(a)}: extraction by ${model(c.extractor)} loses ${f(loss)}.`
+        : `With statements only, ${model(c.verifier)} scores ${f(s)}, ${s === a ? "the same as" : "better than"} on full abstracts (${f(a)}).`);
+    } else {
+      const who = `${c.statements_arm}, statements from ${xName(armOf(c.statements_arm))}`;
+      lines.push(loss > 0 ? `${who}: ${f(s)} vs ${f(a)} on abstracts, a loss of ${f(loss)}.`
+        : loss < 0 ? `${who}: ${f(s)} vs ${f(a)} on abstracts, a gain of ${f(-loss)}.`
+        : `${who}: same score as on abstracts (${f(s)}).`);
     }
   }
-  const exRes = exp.results.find((r) => typeof r.summary?.extraction?.rationale_coverage === "number");
-  const ex = exRes?.summary?.extraction;
-  if (ex?.empty_documents) {
-    const x = exp.arms.find((a) => a.id === exRes?.arm)?.extractor;
-    lines.push(`${model(x)} returned no statements for ${ex.empty_documents} of ${ex.documents} texts.`);
+
+  // Best arm per mode, or a tie.
+  for (const mode of ["abstract", "statements"] as const) {
+    const scored = exp.results.filter((r) => r.mode === mode && r.summary?.label);
+    if (scored.length < 2) continue;
+    const top = Math.max(...scored.map((r) => r.summary!.label!.macro_f1));
+    const best = scored.filter((r) => Math.abs(r.summary!.label!.macro_f1 - top) < 1e-9);
+    const where = mode === "abstract" ? "on abstracts" : "on statements";
+    if (best.length === scored.length) {
+      lines.push(`All arms ${where} tie at ${f(top)}.`);
+    } else if (best.length > 1) {
+      lines.push(`${best.map((r) => r.arm).join(" and ")} tie for best ${where} at ${f(top)}.`);
+    } else {
+      const arm = armOf(best[0].arm);
+      const setup = mode === "abstract" ? model(arm?.verifier) : `${xName(arm)} → ${model(arm?.verifier)}`;
+      lines.push(`Best ${where}: ${best[0].arm} (${setup}), ${f(top)}.`);
+    }
   }
-  if (ex) {
-    lines.push(`Statements quote ${Math.round((ex.rationale_coverage ?? 0) * 100)}% of the gold evidence; ${Math.round(ex.grounded_rate * 100)}% of quotes are found in the source.`);
+
+  // Extraction quality, per extracting arm.
+  const exArms = exp.results.filter((r) => typeof r.summary?.extraction?.rationale_coverage === "number");
+  for (const r of exArms) {
+    const ex = r.summary!.extraction!;
+    const prefix = exArms.length > 1 ? `${r.arm}, ${xName(armOf(r.arm))}: ` : "";
+    if (ex.empty_documents) {
+      lines.push(`${prefix}${exArms.length > 1 ? "no" : `${xName(armOf(r.arm))} returned no`} statements for ${ex.empty_documents} of ${ex.documents} texts.`);
+    }
+    lines.push(`${prefix}${exArms.length > 1 ? "statements quote" : "Statements quote"} ${Math.round((ex.rationale_coverage ?? 0) * 100)}% of the gold evidence; ${Math.round(ex.grounded_rate * 100)}% of quotes are found in the source.`);
   }
   const pairs = Math.max(0, ...exp.results.map((r) => r.summary?.pairs ?? 0));
   if (pairs > 0 && pairs < 100) lines.push(`Only ${pairs} pair${pairs === 1 ? "" : "s"}: differences below ~0.1 can be chance.`);

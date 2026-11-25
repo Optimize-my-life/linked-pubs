@@ -62,3 +62,30 @@ test("badges land on the blocks that produced them", () => {
     m: ["extraction loses 0.19"],
   });
 });
+
+test("several extractors: verdicts name their arm and prompt, ties are called ties", () => {
+  const S2: Arm = { ...S, id: "arm3", extractor_prompt: "extract-v2", path: ["d", "x2", "v", "m"] };
+  const label = { accuracy: 0.67, macro_f1: 0.27, per_class: {} };
+  const ext = { documents: 3, empty_documents: 0, statements: 22, grounded_rate: 1, rationale_coverage: 1 };
+  const e: Experiment = { ...exp, arms: [A, S, S2],
+    results: [
+      { arm: "arm1", label: "", mode: "abstract", seconds: 1, error: null, summary: { pairs: 3, label } },
+      { arm: "arm2", label: "", mode: "statements", seconds: 1, error: null, summary: { pairs: 3, label, extraction: ext } },
+      { arm: "arm3", label: "", mode: "statements", seconds: 1, error: null, summary: { pairs: 3, label, extraction: { ...ext, grounded_rate: 0.95 } } },
+    ],
+    comparisons: [
+      { abstract_arm: "arm1", statements_arm: "arm2", verifier: "ollama:qwen3:8b", extractor: "ollama:qwen3:8b", extraction_loss_macro_f1: 0 },
+      { abstract_arm: "arm1", statements_arm: "arm3", verifier: "ollama:qwen3:8b", extractor: "ollama:qwen3:8b", extraction_loss_macro_f1: 0 },
+    ] };
+  assert.deepEqual(describeResults(e), [
+    "arm2, statements from qwen3:8b: same score as on abstracts (0.27).",
+    "arm3, statements from qwen3:8b (prompt v2): same score as on abstracts (0.27).",
+    "All arms on statements tie at 0.27.",
+    "arm2, qwen3:8b: statements quote 100% of the gold evidence; 100% of quotes are found in the source.",
+    "arm3, qwen3:8b (prompt v2): statements quote 100% of the gold evidence; 95% of quotes are found in the source.",
+    "Only 3 pairs: differences below ~0.1 can be chance.",
+  ]);
+  const b = badgesFor(e);
+  assert.deepEqual(b.v, ["on abstracts: macro-F1 0.27", "arm2 on statements: macro-F1 0.27", "arm3 on statements: macro-F1 0.27"]);
+  assert.deepEqual(b.m, ["arm2: no extraction loss", "arm3: no extraction loss"]);
+});

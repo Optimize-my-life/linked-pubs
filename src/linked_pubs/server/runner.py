@@ -8,6 +8,7 @@ already ran is not paid for (in time) again.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import threading
 import time
@@ -62,6 +63,8 @@ class Runner:
                  allow_paid: bool = False):
         self.root = data_dir / "experiments"
         self.root.mkdir(parents=True, exist_ok=True)
+        # One server per data folder: a second one would mark running experiments as interrupted.
+        self._lockfile = _lock(self.root / ".server.lock")
         self.scifact_dir, self.cache_dir = scifact_dir, cache_dir
         self.provider_factory = provider_factory
         self.allow_paid = allow_paid
@@ -438,6 +441,28 @@ def _comparisons(arms: list[Arm], results: list[dict]) -> list[dict]:
                 out.append({"abstract_arm": a.id, "statements_arm": s.id, "verifier": s.verifier,
                             "extractor": s.extractor, "extraction_loss_macro_f1": round(fa - fs, 4)})
     return out
+
+
+class DataFolderInUse(RuntimeError):
+    pass
+
+
+def _lock(path: Path):
+    """Exclusive lock held for the life of the process (released by the OS on exit)."""
+    f = open(path, "a+")
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        raise DataFolderInUse(f"another linked-pubs server already uses {path.parent.parent}; "
+                              "stop it first (scripts/stop.ps1) or use another --data folder")
+    return f
 
 
 def auto_name(arms: list[Arm]) -> str:

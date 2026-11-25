@@ -72,8 +72,10 @@ cd web; npm ci; npm run build; cd ..     # once, and after UI changes
 .venv\Scripts\linked-pubs serve           # http://127.0.0.1:8000
 ```
 
-The server has no login and binds to 127.0.0.1. To use the GPU PC, run it there and open it
-from the laptop through an SSH tunnel:
+On the GPU PC, `scripts\start.ps1` (or `scripts/start.sh`) runs it in the background so it
+survives the SSH session; `scripts\stop.ps1` stops it. Only one server per data folder can run.
+
+The server has no login and binds to 127.0.0.1. Open it from the laptop through an SSH tunnel:
 
 ```powershell
 ssh -N -L 8000:127.0.0.1:8000 <host-alias>  # then open http://localhost:8000
