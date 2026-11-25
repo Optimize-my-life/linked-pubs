@@ -69,3 +69,16 @@ feasibility.
 - BioDivergence: arxiv.org/abs/2606.11208
 - GLEN-Bench, NGQA (ACL 2025), NutriBench (arXiv 2407.12843), Swiss Food KG
   (arXiv 2507.10156): structured nutrition resources
+
+## Results
+
+- 2026-11-25, first baseline, free local run: `ollama:qwen3:8b` (thinking off) for extraction
+  and verification, SciFact dev, first 20 claims = 22 claim/abstract pairs (19 abstracts).
+  Too small for conclusions; a pipeline check.
+  - Against raw abstracts: macro-F1 0.80, accuracy 0.82, rationale F1 0.59.
+  - Against extracted statements only: macro-F1 0.61, accuracy 0.64, rationale F1 0.67.
+  - Extraction loss: about 0.19 macro-F1. 116 statements, 97% with the quote found in the
+    source; they cover 86% of the gold evidence sentences.
+  - With statements only, the losses are SUPPORT/CONTRADICT pairs that turn into NEI (5 of 22):
+    the statements lose detail the verdict needs, even when they cover the right sentence.
+  - Run folder: `data/runs/20261125-144054-scifact-dev/` (local, not committed).
