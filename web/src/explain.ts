@@ -28,9 +28,12 @@ export function describeEstimate(e?: Estimate): string {
 export function autoName(arms: Arm[]): string {
   if (!arms.length) return "";
   const models = [...new Set(arms.flatMap((a) => [a.extractor, a.verifier]).filter(Boolean).map(model))];
-  const prompts = [...new Set(arms.filter((a) => a.extractor).map((a) => a.extractor_prompt ?? "extract-v1"))];
+  const short = (p: string) => p.replace(/^(extract|verify)-/, "");
+  const xp = [...new Set(arms.filter((a) => a.extractor).map((a) => a.extractor_prompt ?? "extract-v1"))];
+  const vp = [...new Set(arms.filter((a) => a.verifier).map((a) => a.verifier_prompt ?? "verify-v1"))];
   const parts = [models.join(" vs ")];
-  if (prompts.length > 1) parts.push("prompt " + prompts.map((p) => p.replace("extract-", "")).join(" vs "));
+  if (xp.length > 1 || xp.some((p) => promptTag(p))) parts.push("prompt " + xp.map(short).join(" vs "));
+  if (vp.length > 1 || vp.some((p) => promptTag(p))) parts.push("judge prompt " + vp.map(short).join(" vs "));
   const data = [...new Set(arms.map((a) => describeData(a.data)))].join(" + ");
   const modes = new Set(arms.map((a) => a.mode));
   const what = modes.has("abstract") && modes.has("statements") ? "abstracts vs statements"
@@ -63,7 +66,11 @@ export function badgesFor(exp: Experiment): Record<string, string[]> {
     const text = loss > 0 ? `extraction loses ${loss.toFixed(2)}` : loss < 0 ? `extraction gains ${(-loss).toFixed(2)}` : "no extraction loss";
     add(arm?.path[arm.path.length - 1], many ? `${c.statements_arm}: ${text}` : text);
   }
-  return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [...v]]));
+  // A block with many arms would grow very tall: keep 3 lines and point to the full list.
+  return Object.fromEntries(Object.entries(out).map(([k, v]) => {
+    const lines = [...v];
+    return [k, lines.length > 4 ? [...lines.slice(0, 3), `+${lines.length - 3} more in Runs`] : lines];
+  }));
 }
 
 /** Total time for the plan, or null when some model has never run on this machine. */
@@ -79,12 +86,15 @@ export function describeData(d: Arm["data"]): string {
   return d.limit ? `${d.limit} SciFact ${d.split} claim${d.limit === 1 ? "" : "s"}` : `all SciFact ${d.split} claims`;
 }
 
-/** "prompt v2" for non-default extraction prompts, else "". */
-export const promptTag = (p?: string) => (p && p !== "extract-v1" ? ` (prompt ${p.replace("extract-", "")})` : "");
+/** " (prompt v2)" for non-default prompts, else "". */
+export const promptTag = (p?: string) =>
+  p && p !== "extract-v1" && p !== "verify-v1" ? ` (prompt ${p.replace(/^(extract|verify)-/, "")})` : "";
 
 export function describeArm(a: Arm): string {
-  const x = model(a.extractor) + promptTag(a.extractor_prompt), v = model(a.verifier);
-  if (a.mode === "abstract") return `${v} judges each claim against the full abstract.`;
+  const x = model(a.extractor) + promptTag(a.extractor_prompt), v = model(a.verifier) + promptTag(a.verifier_prompt);
+  if (a.mode === "abstract") {
+    return `${v} judges each claim against the full abstract.${a.auto ? " Added automatically as the baseline for extraction loss." : ""}`;
+  }
   if (a.mode === "statements") return `${x} extracts statements; ${v} judges claims against those only.`;
   if (dataOf(a).kind === "documents") return `${x} extracts statements from the documents.`;
   return `${x} extracts statements; scored on quote accuracy and evidence coverage.`;
@@ -96,12 +106,18 @@ export function describePlan(arms: Arm[]): { headline: string; notes: string[] }
   const datasets = [...new Set(arms.map((a) => describeData(dataOf(a))))];
   const headline = `Runs ${arms.length} arm${arms.length > 1 ? "s" : ""} on ${datasets.join(" and ")}.`;
   const notes: string[] = [];
+  const pairs: string[] = [];
   for (const s of arms.filter((a) => a.mode === "statements")) {
     const a = arms.find((b) => b.mode === "abstract" && b.verifier === s.verifier &&
+      (b.verifier_prompt ?? "verify-v1") === (s.verifier_prompt ?? "verify-v1") &&
       JSON.stringify(dataOf(b)) === JSON.stringify(dataOf(s)));
-    if (a) notes.push(`${a.id} vs ${s.id} shows what extraction loses.`);
+    if (a) pairs.push(`${a.id} vs ${s.id}`);
   }
-  const verifiers = [...new Set(arms.filter((a) => a.verifier).map((a) => model(a.verifier)))];
+  if (pairs.length === 1) notes.push(`${pairs[0]} shows what extraction loses.`);
+  else if (pairs.length > 1) notes.push(`Each of the ${pairs.length} statements arms is compared with its abstract baseline: that difference is what extraction loses.`);
+  const auto = arms.filter((a) => a.auto).map((a) => a.id);
+  if (auto.length) notes.push(`${auto.join(", ")} ${auto.length === 1 ? "was" : "were"} added automatically, so every extractor gets its loss measured.`);
+  const verifiers = [...new Set(arms.filter((a) => a.verifier).map((a) => model(a.verifier) + promptTag(a.verifier_prompt)))];
   const extractors = [...new Set(arms.filter((a) => a.extractor).map((a) => model(a.extractor) + promptTag(a.extractor_prompt)))];
   if (verifiers.length > 1) notes.push(`Compares verifiers: ${verifiers.join(", ")}.`);
   if (extractors.length > 1) notes.push(`Compares extractors: ${extractors.join(", ")}.`);
@@ -151,7 +167,10 @@ export function describeResults(exp: Experiment): string[] {
         ? `With statements only, ${model(c.verifier)} scores ${f(s)} instead of ${f(a)}: extraction by ${model(c.extractor)} loses ${f(loss)}.`
         : `With statements only, ${model(c.verifier)} scores ${f(s)}, ${s === a ? "the same as" : "better than"} on full abstracts (${f(a)}).`);
     } else {
-      const who = `${c.statements_arm}, statements from ${xName(armOf(c.statements_arm))}`;
+      const severalJudges = new Set(exp.comparisons.map((x) => x.verifier + (x.verifier_prompt ?? ""))).size > 1;
+      const sArm = armOf(c.statements_arm);
+      const judge = severalJudges ? `, judged by ${model(sArm?.verifier)}${promptTag(sArm?.verifier_prompt)}` : "";
+      const who = `${c.statements_arm}, statements from ${xName(sArm)}${judge}`;
       lines.push(loss > 0 ? `${who}: ${f(s)} vs ${f(a)} on abstracts, a loss of ${f(loss)}.`
         : loss < 0 ? `${who}: ${f(s)} vs ${f(a)} on abstracts, a gain of ${f(-loss)}.`
         : `${who}: same score as on abstracts (${f(s)}).`);

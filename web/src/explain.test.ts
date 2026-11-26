@@ -89,3 +89,38 @@ test("several extractors: verdicts name their arm and prompt, ties are called ti
   assert.deepEqual(b.v, ["on abstracts: macro-F1 0.27", "arm2 on statements: macro-F1 0.27", "arm3 on statements: macro-F1 0.27"]);
   assert.deepEqual(b.m, ["arm2: no extraction loss", "arm3: no extraction loss"]);
 });
+
+test("many arms: plan stays short and names the automatic baselines", async () => {
+  const xs: Arm[] = ["a", "b", "c"].map((m, i) => ({ ...S, id: `arm${i + 1}`, extractor: `ollama:${m}` }));
+  const base: Arm = { ...A, id: "arm4", auto: true };
+  const p = describePlan([...xs, base]);
+  assert.deepEqual(p.notes.slice(0, 2), [
+    "Each of the 3 statements arms is compared with its abstract baseline: that difference is what extraction loses.",
+    "arm4 was added automatically, so every extractor gets its loss measured.",
+  ]);
+  const { describeArm, promptTag } = await import("./explain.ts");
+  assert.match(describeArm(base), /Added automatically/);
+  assert.equal(promptTag("verify-strict"), " (prompt strict)");
+  assert.equal(promptTag("verify-v1"), "");
+});
+
+test("quick comparison graph: arm count matches the shape", async () => {
+  const { comparisonGraph, quickArmCount } = await import("./templates.ts");
+  const q = { models: ["ollama:a", "ollama:b"], role: "both" as const, fixed: "ollama:a", prompts: ["extract-v1"], split: "dev", limit: 5 };
+  const g = comparisonGraph(q);
+  assert.equal(g.nodes.filter((n) => n.type === "extractor").length, 2);
+  assert.equal(quickArmCount(q), 4);
+  const e = comparisonGraph({ ...q, role: "extractor", prompts: ["extract-v1", "extract-v2"] });
+  assert.deepEqual(e.nodes.find((n) => n.type === "extractor")?.data.models, ["ollama:a", "ollama:b"]);
+  assert.equal(quickArmCount({ ...q, role: "extractor", prompts: ["extract-v1", "extract-v2"] }), 5);
+});
+
+test("prompt diff shows added and removed words", async () => {
+  const { diffWords, describeDiff } = await import("./diff.ts");
+  const d = diffWords("Keep the numbers exactly.", "Keep all numbers and CIs exactly.");
+  assert.deepEqual(d.filter((x) => x.op !== "same").map((x) => [x.op, x.text.trim()]),
+    [["add", "all"], ["del", "the"], ["add", "and CIs"]]);
+  assert.equal(d.map((x) => (x.op === "del" ? "" : x.text)).join(""), "Keep all numbers and CIs exactly.");
+  assert.equal(d.map((x) => (x.op === "add" ? "" : x.text)).join(""), "Keep the numbers exactly.");
+  assert.equal(describeDiff(d), "adds 3 words, removes 1");
+});

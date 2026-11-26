@@ -63,9 +63,15 @@ extractor configuration in `data/cache/statements/`, so reruns don't pay for ext
 ## Experiment builder (web UI)
 
 Drag blocks onto a canvas and connect them: SciFact dataset or dropped PDFs → extractor →
-verifier → metrics. Each path to a metrics block is one arm; several model blocks compare
-models; an abstract path plus a statements path with the same verifier gives the extraction
-loss. Runs queue up (one at a time), show progress, and keep their results.
+verifier → metrics. Each path to a metrics block is one arm. A block can hold several models
+and prompts: every combination becomes an arm, and the abstract baselines needed for the
+extraction loss are added automatically. Runs queue up (one at a time), show progress, and
+keep their results.
+
+- **Models tab:** tick models and choose what they do (extract, judge, or both end to end):
+  the canvas is built for you. Also downloads free models through Ollama.
+- **Prompts tab:** read every prompt, copy one, edit it, save it as a new version (with the
+  changes highlighted), and add it to the blocks to compare it with the others.
 
 ```powershell
 cd web; npm ci; npm run build; cd ..     # once, and after UI changes
@@ -88,7 +94,7 @@ Results: plain verdicts, scores on the blocks, "Why?" (pairs that extraction los
 claim, gold evidence and the statements the verifier saw) and a Compare tab across runs.
 
 UI development: `linked-pubs serve` plus `npm run dev` in `web/` (http://localhost:5173,
-proxies `/api`). UI tests: `npm test`; screenshots: `node scripts/screenshot.mjs` (needs
+proxies `/api`). UI tests: `npm test`; screenshots: `node scripts/screenshot.mjs` and `node scripts/screenshot-tabs.mjs` (needs
 `npx playwright install chromium` once). Paid APIs only with `LINKED_PUBS_ALLOW_PAID=1`. Ollama elsewhere: set
 `OLLAMA_HOST`.
 

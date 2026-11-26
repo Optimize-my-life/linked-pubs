@@ -1,14 +1,14 @@
 import { Handle, Position, useReactFlow, type NodeProps } from "@xyflow/react";
 import { createContext, useContext, useState, type DragEvent, type ReactNode } from "react";
-import { api, type ModelInfo, type PromptInfo } from "./api";
+import { api, type ModelInfo, type PromptInfo, type PromptKind } from "./api";
 
 export type BlockType = "dataset" | "documents" | "extractor" | "verifier" | "metrics";
 
 export const BLOCKS: Record<BlockType, { title: string; hint: string; defaults: Record<string, unknown> }> = {
   dataset: { title: "SciFact", hint: "claims + abstracts with gold labels", defaults: { split: "dev", limit: 20 } },
   documents: { title: "Documents", hint: "drop PDFs here", defaults: {} },
-  extractor: { title: "Extractor", hint: "text → typed statements", defaults: { model: "", prompt: "extract-v1" } },
-  verifier: { title: "Verifier", hint: "claim + evidence → label", defaults: { model: "" } },
+  extractor: { title: "Extractor", hint: "text → typed statements", defaults: { models: [], prompts: ["extract-v1"] } },
+  verifier: { title: "Verifier", hint: "claim + evidence → label", defaults: { models: [], prompts: ["verify-v1"] } },
   metrics: { title: "Metrics", hint: "scores every path ending here", defaults: {} },
 };
 
@@ -42,24 +42,77 @@ function Shell({ type, data, children, inputs = true, outputs = true }: {
   );
 }
 
-function ModelSelect({ id, value }: { id: string; value: string }) {
+/** Models chosen on a block. Older graphs stored a single `model`. */
+export function blockModels(data: Record<string, unknown>): string[] {
+  if (Array.isArray(data.models)) return data.models as string[];
+  return typeof data.model === "string" && data.model ? [data.model] : [];
+}
+
+export function blockPrompts(data: Record<string, unknown>, kind: PromptKind): string[] {
+  if (Array.isArray(data.prompts) && data.prompts.length) return data.prompts as string[];
+  if (typeof data.prompt === "string" && data.prompt) return [data.prompt];
+  return [kind === "extract" ? "extract-v1" : "verify-v1"];
+}
+
+/** Chips for the chosen items plus a dropdown to add one more. Each extra choice is an extra arm. */
+function Picker({ values, options, placeholder, onChange, minOne }: {
+  values: string[]; options: { value: string; label: string; title?: string }[]; placeholder: string;
+  onChange: (v: string[]) => void; minOne?: boolean;
+}) {
+  const find = (v: string) => options.find((o) => o.value === v);
+  const rest = options.filter((o) => !values.includes(o.value));
+  return (
+    <div className="picker nodrag">
+      {values.map((v) => (
+        <span key={v} className={`chip ${find(v) ? "" : "missing"}`} title={find(v)?.title ?? "not available here"}>
+          {find(v)?.label ?? `${v.replace(/^ollama:/, "")} (missing)`}
+          {!(minOne && values.length === 1) && (
+            <button title="remove" onClick={() => onChange(values.filter((x) => x !== v))}>×</button>
+          )}
+        </span>
+      ))}
+      {rest.length > 0 && (
+        <select value="" onChange={(e) => e.target.value && onChange([...values, e.target.value])}>
+          <option value="">{values.length ? "+ add" : placeholder}</option>
+          {rest.map((o) => <option key={o.value} value={o.value} title={o.title}>{o.label}</option>)}
+        </select>
+      )}
+    </div>
+  );
+}
+
+function ModelPicker({ id, data }: { id: string; data: Record<string, unknown> }) {
   const { models } = useContext(ModelsContext);
   const { updateNodeData } = useReactFlow();
-  const known = models.some((m) => m.spec === value);
+  const options = models.map((m) => ({
+    value: m.spec,
+    label: m.name + (m.free ? "" : " · paid"),
+    title: [m.params, m.size_gb ? `${m.size_gb} GB` : "", m.quant].filter(Boolean).join(" · "),
+  }));
+  return <Picker values={blockModels(data)} options={options} placeholder="choose a model…"
+    onChange={(v) => updateNodeData(id, { models: v, model: undefined })} />;
+}
+
+function PromptPicker({ id, data, kind }: { id: string; data: Record<string, unknown>; kind: PromptKind }) {
+  const { prompts } = useContext(ModelsContext);
+  const { updateNodeData } = useReactFlow();
+  const options = prompts.filter((p) => p.kind === kind).map((p) => ({ value: p.id, label: p.name, title: p.note }));
+  const values = blockPrompts(data, kind);
+  const note = values.length === 1 ? prompts.find((p) => p.id === values[0])?.note : "";
   return (
-    <select className="nodrag" value={value} onChange={(e) => updateNodeData(id, { model: e.target.value })}>
-      <option value="">choose a model…</option>
-      {!known && value && <option value={value}>{value} (not available)</option>}
-      {models.map((m) => (
-        <option key={m.spec} value={m.spec}>
-          {m.name}
-          {m.params ? ` · ${m.params}` : ""}
-          {m.size_gb ? ` · ${m.size_gb} GB` : ""}
-          {m.free ? "" : " · paid"}
-        </option>
-      ))}
-    </select>
+    <>
+      <Picker values={values} options={options} placeholder="prompt…" minOne
+        onChange={(v) => updateNodeData(id, { prompts: v, prompt: undefined })} />
+      {note && <div className="muted">{note}</div>}
+    </>
   );
+}
+
+/** "2 models × 2 prompts: 4 variants" when a block holds more than one choice. */
+function Variants({ data, kind }: { data: Record<string, unknown>; kind: PromptKind }) {
+  const m = blockModels(data).length, p = blockPrompts(data, kind).length;
+  if (m * p < 2) return null;
+  return <div className="variants">{m} model{m === 1 ? "" : "s"} × {p} prompt{p === 1 ? "" : "s"}: {m * p} variants</div>;
 }
 
 export function DatasetNode({ id, data }: NodeProps) {
@@ -126,28 +179,12 @@ export function DocumentsNode({ id, data }: NodeProps) {
   );
 }
 
-function PromptSelect({ id, value }: { id: string; value: string }) {
-  const { prompts } = useContext(ModelsContext);
-  const { updateNodeData } = useReactFlow();
-  const current = prompts.find((p) => p.id === value);
-  return (
-    <>
-      <select className="nodrag" value={value} title={current?.note}
-        onChange={(e) => updateNodeData(id, { prompt: e.target.value })}>
-        {!current && <option value={value}>{value}</option>}
-        {prompts.map((p) => <option key={p.id} value={p.id}>{p.id.replace("extract-", "prompt ")}</option>)}
-      </select>
-      {current?.note && <div className="muted">{current.note}</div>}
-    </>
-  );
-}
-
 export function ExtractorNode({ id, data }: NodeProps) {
-  const d = data as { model: string; prompt?: string };
   return (
     <Shell type="extractor" data={data}>
-      <ModelSelect id={id} value={d.model} />
-      <PromptSelect id={id} value={d.prompt ?? "extract-v1"} />
+      <ModelPicker id={id} data={data} />
+      <PromptPicker id={id} data={data} kind="extract" />
+      <Variants data={data} kind="extract" />
     </Shell>
   );
 }
@@ -155,7 +192,9 @@ export function ExtractorNode({ id, data }: NodeProps) {
 export function VerifierNode({ id, data }: NodeProps) {
   return (
     <Shell type="verifier" data={data}>
-      <ModelSelect id={id} value={(data as { model: string }).model} />
+      <ModelPicker id={id} data={data} />
+      <PromptPicker id={id} data={data} kind="verify" />
+      <Variants data={data} kind="verify" />
       <div className="muted">SUPPORT / CONTRADICT / NEI</div>
     </Shell>
   );

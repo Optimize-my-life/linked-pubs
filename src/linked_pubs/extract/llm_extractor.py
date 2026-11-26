@@ -83,15 +83,16 @@ RETRY_NUDGE = ("\n\nThis text contains factual statements (results or background
 
 class LLMExtractor:
     def __init__(self, provider: LLMProvider, grounding_threshold: float = 0.9, max_chars: int = 60000,
-                 retry_empty_chars: int = 300, prompt: str = PROMPT_VERSION):
-        if prompt not in PROMPTS:
+                 retry_empty_chars: int = 300, prompt: str = PROMPT_VERSION, system_prompt: str | None = None):
+        # system_prompt: text of a prompt from the server's prompt library; `prompt` is then its id.
+        if system_prompt is None and prompt not in PROMPTS:
             raise ValueError(f"unknown extraction prompt '{prompt}' (known: {', '.join(PROMPTS)})")
         self.provider = provider
         self.grounding_threshold = grounding_threshold
         self.max_chars = max_chars
         self.retry_empty_chars = retry_empty_chars
         self.prompt = prompt
-        self.system_prompt = PROMPTS[prompt]
+        self.system_prompt = system_prompt if system_prompt is not None else PROMPTS[prompt]
 
     def run_info(self) -> RunInfo:
         return RunInfo(

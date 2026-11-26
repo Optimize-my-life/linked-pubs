@@ -7,7 +7,14 @@ export type ModelInfo = {
   quant?: string;
 };
 
-export type PromptInfo = { id: string; note: string; text: string };
+export type PromptKind = "extract" | "verify";
+export type PromptInfo = {
+  id: string; kind: PromptKind; name: string; note: string; text: string;
+  base: string | null; builtin: boolean; created_at: string | null;
+};
+
+export type PullState = { name: string; status: string; completed: number; total: number; error: string | null };
+export type CatalogEntry = { name: string; gb: number | null; note: string; installed: boolean; pull: PullState | null };
 
 export type Health = {
   ollama_host: string;
@@ -28,7 +35,9 @@ export type Arm = {
   extractor: string | null;
   extractor_prompt?: string;
   verifier: string | null;
+  verifier_prompt?: string;
   path: string[];
+  auto?: boolean;
   label?: string;
 };
 
@@ -65,7 +74,7 @@ export type Comparison = { counts: Record<"lost" | "gained" | "both_wrong" | "sa
 
 export type BoardRow = {
   experiment: string; experiment_name: string; date: string; arm: string; data: string;
-  mode: Arm["mode"]; extractor: string | null; extractor_prompt?: string; verifier: string | null; pairs: number | null;
+  mode: Arm["mode"]; extractor: string | null; extractor_prompt?: string; verifier: string | null; verifier_prompt?: string; pairs: number | null;
   macro_f1: number | null; accuracy: number | null; rationale_f1: number | null;
   statements: number | null; grounded_rate: number | null; rationale_coverage: number | null; seconds: number | null;
 };
@@ -111,7 +120,7 @@ export type Experiment = {
   progress: Progress;
   results: ArmResult[];
   comparisons: { abstract_arm: string; statements_arm: string; verifier: string; extractor: string;
-    extraction_loss_macro_f1: number }[];
+    extractor_prompt?: string; verifier_prompt?: string; extraction_loss_macro_f1: number }[];
   error: string | null;
 };
 
@@ -146,6 +155,11 @@ export const api = {
   health: () => call<Health>("/api/health"),
   models: () => call<ModelInfo[]>("/api/models"),
   prompts: () => call<PromptInfo[]>("/api/prompts"),
+  createPrompt: (p: { kind: PromptKind; name: string; text: string; note: string; base: string | null }) =>
+    call<PromptInfo>("/api/prompts", post(p)),
+  deletePrompt: (id: string) => call<{ deleted: string }>(`/api/prompts/${id}`, { method: "DELETE" }),
+  catalog: () => call<CatalogEntry[]>("/api/models/catalog"),
+  pull: (name: string) => call<PullState>("/api/models/pull", post({ name })),
   compile: (graph: GraphJSON) => call<Compiled>("/api/compile", post(graph)),
   submit: (name: string, graph: GraphJSON) => call<Experiment>("/api/experiments", post({ name, graph })),
   experiments: () => call<ExperimentSummary[]>("/api/experiments"),

@@ -61,7 +61,7 @@ export function Leaderboard({ onOpen }: { onOpen: (experimentId: string) => void
 }
 
 function setup(r: BoardRow): string {
-  if (r.mode === "abstract") return model(r.verifier);
-  if (r.mode === "statements") return `${model(r.extractor)}${promptTag(r.extractor_prompt)} → ${model(r.verifier)}`;
+  if (r.mode === "abstract") return model(r.verifier) + promptTag(r.verifier_prompt);
+  if (r.mode === "statements") return `${model(r.extractor)}${promptTag(r.extractor_prompt)} → ${model(r.verifier)}${promptTag(r.verifier_prompt)}`;
   return model(r.extractor) + promptTag(r.extractor_prompt);
 }

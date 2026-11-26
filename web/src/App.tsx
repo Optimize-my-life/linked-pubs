@@ -5,7 +5,10 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { api, type Compiled, type Experiment, type ExperimentSummary, type GraphJSON, type Health, type ModelInfo, type PromptInfo } from "./api";
-import { ALLOWED, BLOCKS, ModelsContext, nodeTypes, useUpload, type BlockType } from "./nodes";
+type Tab = "plan" | "runs" | "compare" | "models" | "prompts";
+import { ALLOWED, BLOCKS, blockModels, blockPrompts, ModelsContext, nodeTypes, useUpload, type BlockType } from "./nodes";
+import { ModelsTab } from "./Models";
+import { PromptsTab } from "./Prompts";
 import { autoName, badgesFor, describeArm, describeEstimate, describePlan, describeProgress, dur, totalSeconds } from "./explain";
 import { Leaderboard } from "./Leaderboard";
 import { Results } from "./Results";
@@ -22,8 +25,8 @@ function baseline(model: string): { nodes: Node[]; edges: Edge[] } {
   // with the same verifier, so the difference is the extraction loss.
   const nodes: Node[] = [
     { id: "dataset-1", type: "dataset", position: { x: 0, y: 120 }, data: { split: "dev", limit: 20 } },
-    { id: "extractor-1", type: "extractor", position: { x: 280, y: 250 }, data: { model } },
-    { id: "verifier-1", type: "verifier", position: { x: 560, y: 120 }, data: { model } },
+    { id: "extractor-1", type: "extractor", position: { x: 280, y: 250 }, data: { models: model ? [model] : [], prompts: ["extract-v1"] } },
+    { id: "verifier-1", type: "verifier", position: { x: 560, y: 120 }, data: { models: model ? [model] : [], prompts: ["verify-v1"] } },
     { id: "metrics-1", type: "metrics", position: { x: 840, y: 130 }, data: {} },
   ];
   const edges: Edge[] = [
@@ -70,11 +73,13 @@ function Builder() {
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [prompts, setPrompts] = useState<PromptInfo[]>([]);
-  useEffect(() => { api.prompts().then(setPrompts).catch(() => undefined); }, []);
+  const refreshPrompts = useCallback(() => { api.prompts().then(setPrompts).catch(() => undefined); }, []);
+  useEffect(refreshPrompts, [refreshPrompts]);
   const [health, setHealth] = useState<Health | null>(null);
   const [compiled, setCompiled] = useState<Compiled>({ arms: [], errors: [] });
   const [name, setName] = useState("");
-  const [tab, setTab] = useState<"plan" | "runs" | "compare">("plan");
+  const [tab, setTab] = useState<Tab>("plan");
+  const [previous, setPrevious] = useState<{ nodes: Node[]; edges: Edge[] } | null>(null);
   const [runs, setRuns] = useState<ExperimentSummary[]>([]);
   const [selected, setSelected] = useState<Experiment | null>(null);
   const [submitError, setSubmitError] = useState("");
@@ -102,7 +107,8 @@ function Builder() {
     if (!defaultModel || filledDefaults.current) return;
     filledDefaults.current = true;
     setNodes((ns) => ns.map((n) =>
-      (n.type === "extractor" || n.type === "verifier") && !n.data.model ? { ...n, data: { ...n.data, model: defaultModel } } : n));
+      (n.type === "extractor" || n.type === "verifier") && !blockModels(n.data).length
+        ? { ...n, data: { ...n.data, models: [defaultModel], model: undefined } } : n));
   }, [defaultModel, setNodes]);
 
   const graph = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
@@ -135,7 +141,7 @@ function Builder() {
   const addBlock = useCallback((type: BlockType, position?: { x: number; y: number }) => {
     const id = newId(type);
     const data = { ...BLOCKS[type].defaults };
-    if ((type === "extractor" || type === "verifier") && defaultModel) data.model = defaultModel;
+    if ((type === "extractor" || type === "verifier") && defaultModel) data.models = [defaultModel];
     const pos = position ?? rf.screenToFlowPosition({ x: window.innerWidth / 2 - 150, y: window.innerHeight / 2 });
     setNodes((ns) => [...ns, { id, type, position: pos, data }]);
     return id;
@@ -182,6 +188,35 @@ function Builder() {
     setName(`${exp.name} (copy)`);
     setTab("plan");
     setTimeout(() => rf.fitView({ padding: 0.2 }), 50);
+  };
+
+  // Put a generated graph on the canvas; the old one can be restored from the Plan tab.
+  const replaceCanvas = (g: GraphJSON) => {
+    setPrevious({ nodes, edges });
+    const next = fromGraph(g);
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setName("");
+    setTab("plan");
+    setTimeout(() => rf.fitView({ padding: 0.2 }), 50);
+  };
+  const undoReplace = () => {
+    if (!previous) return;
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setPrevious(null);
+    setTimeout(() => rf.fitView({ padding: 0.2 }), 50);
+  };
+
+  // Add a prompt to every block of its kind, so the next run compares it with the current ones.
+  const addPromptToBlocks = (p: PromptInfo) => {
+    const type = p.kind === "extract" ? "extractor" : "verifier";
+    setNodes((ns) => ns.map((n) => {
+      if (n.type !== type) return n;
+      const current = blockPrompts(n.data, p.kind);
+      return current.includes(p.id) ? n : { ...n, data: { ...n.data, prompts: [...current, p.id], prompt: undefined } };
+    }));
+    setTab("plan");
   };
 
   const reset = () => {
@@ -272,6 +307,10 @@ function Builder() {
             <button className={tab === "runs" ? "active" : ""} onClick={() => setTab("runs")}>Runs ({runs.length})</button>
             <button className={tab === "compare" ? "active" : ""} onClick={() => setTab("compare")}
               title="All finished arms side by side">Compare</button>
+            <button className={tab === "models" ? "active" : ""} onClick={() => setTab("models")}
+              title="Pick models to compare, download more">Models</button>
+            <button className={tab === "prompts" ? "active" : ""} onClick={() => setTab("prompts")}
+              title="Read, copy and edit prompts">Prompts</button>
           </div>
 
           {tab === "plan" && (
@@ -281,9 +320,15 @@ function Builder() {
                 <input value={name} placeholder={autoName(compiled.arms) || "e.g. qwen3 8b vs 14b"}
                   onChange={(e) => setName(e.target.value)} />
               </label>
+              {previous && (
+                <div className="note small row between">
+                  Canvas replaced by the comparison.
+                  <button onClick={undoReplace}>Undo</button>
+                </div>
+              )}
               {plan.headline && <div className="plan-headline">{plan.headline}</div>}
               {compiled.arms.map((a) => (
-                <div key={a.id} className="arm">
+                <div key={a.id} className={`arm ${a.auto ? "auto" : ""}`}>
                   <b>{a.id}</b> {describeArm(a)}
                   <div className="muted small">{describeEstimate(compiled.estimates?.find((e) => e.arm === a.id))}</div>
                 </div>
@@ -329,6 +374,13 @@ function Builder() {
               {selected && <Results exp={selected} onLoadGraph={() => loadGraph(selected)} />}
             </div>
           )}
+
+          {tab === "models" && (
+            <ModelsTab models={models} prompts={prompts} defaultModel={defaultModel} onChanged={refreshModels}
+              onBuild={replaceCanvas} />
+          )}
+
+          {tab === "prompts" && <PromptsTab prompts={prompts} onSaved={refreshPrompts} onUse={addPromptToBlocks} />}
 
           {tab === "compare" && (
             <Leaderboard onOpen={(id) => api.experiment(id).then((e) => { setSelected(e); setTab("runs"); })} />

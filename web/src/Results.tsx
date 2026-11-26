@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api, type Arm, type ArmResult, type Comparison, type Experiment, type Rows as RowsData } from "./api";
-import { describeArm, describeProgress, describeResults, dur, LABEL, METRIC_HELP } from "./explain";
+import { describeArm, describeProgress, describeResults, dur, LABEL, METRIC_HELP, model, promptTag } from "./explain";
 
 const pct = (x?: number | null) => (x === undefined || x === null ? "–" : `${Math.round(x * 100)}%`);
 const num = (x?: number | null) => (x === undefined || x === null ? "–" : x.toFixed(2));
@@ -34,6 +34,8 @@ export function Results({ exp, onLoadGraph }: { exp: Experiment; onLoadGraph: ()
         </div>
       )}
 
+      {exp.comparisons.length > 1 && <ComparisonTable exp={exp} />}
+
       {exp.comparisons.map((c) => (
         <button key={c.statements_arm} className="link-button"
           onClick={() => setView({ kind: "compare", a: c.abstract_arm, s: c.statements_arm })}>
@@ -57,6 +59,42 @@ export function Results({ exp, onLoadGraph }: { exp: Experiment; onLoadGraph: ()
       {view?.kind === "compare" && (
         <CompareView expId={exp.id} a={view.a} s={view.s} key={view.s} onClose={() => setView(null)} />
       )}
+    </div>
+  );
+}
+
+/** One row per extractor setup, best score on statements first. */
+function ComparisonTable({ exp }: { exp: Experiment }) {
+  const f1 = (arm: string) => exp.results.find((r) => r.arm === arm)?.summary?.label?.macro_f1;
+  const rows = exp.comparisons
+    .map((c) => ({ c, arm: exp.arms.find((a) => a.id === c.statements_arm), s: f1(c.statements_arm), a: f1(c.abstract_arm) }))
+    .sort((x, y) => (y.s ?? -1) - (x.s ?? -1));
+  const best = rows[0]?.s;
+  return (
+    <div className="card">
+      <div className="card-title">All setups, best first</div>
+      <table className="table">
+        <thead>
+          <tr>
+            <th style={{ width: "46%" }} title="extractor (prompt) → judge">setup</th>
+            <th title={METRIC_HELP["macro-F1"]}>statements</th>
+            <th title="Same judge on the full abstracts">abstracts</th>
+            <th title="abstracts minus statements: what extraction loses">loss</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(({ c, arm, s, a }) => (
+            <tr key={c.statements_arm} className={s !== undefined && s === best ? "best" : ""}>
+              <td className="ellipsis" title={arm ? describeArm(arm) : ""}>
+                {c.statements_arm} · {model(arm?.extractor)}{promptTag(arm?.extractor_prompt)} → {model(arm?.verifier)}{promptTag(arm?.verifier_prompt)}
+              </td>
+              <td>{num(s)}</td>
+              <td>{num(a)}</td>
+              <td>{num(c.extraction_loss_macro_f1)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

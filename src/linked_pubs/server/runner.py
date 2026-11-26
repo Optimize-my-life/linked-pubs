@@ -26,6 +26,7 @@ from ..models import Document
 from ..resolve import LLMVerifier
 from .docsets import DocsetStore
 from .graph import Arm, Graph, compile_graph
+from .prompts import PromptStore
 
 ProviderFactory = Callable[[str], LLMProvider]
 ACTIVE = ("queued", "running")
@@ -69,6 +70,7 @@ class Runner:
         self.provider_factory = provider_factory
         self.allow_paid = allow_paid
         self.docsets = DocsetStore(data_dir)
+        self.prompts = PromptStore(data_dir)
         self._lock = threading.Lock()
         self._queue: queue.Queue[str] = queue.Queue()
         self._cancel: dict[str, threading.Event] = {}
@@ -121,7 +123,8 @@ class Runner:
 
     # ---- submitting ----------------------------------------------------------------------
     def submit(self, name: str, graph: Graph) -> dict:
-        compiled = compile_graph(graph, self.allow_paid)
+        library = self.prompts.all()
+        compiled = compile_graph(graph, self.allow_paid, library)
         if compiled.errors:
             raise ValueError("; ".join(compiled.errors))
         exp_id = datetime.now().strftime("%Y%m%d%H%M%S") + uuid.uuid4().hex[:4]
@@ -130,6 +133,10 @@ class Runner:
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "graph": graph.model_dump(), "arms": [a.model_dump() for a in compiled.arms],
             "progress": None, "results": [], "comparisons": [], "error": None,
+            # The exact prompt texts, so a run and its record survive later edits or deletes.
+            "prompt_texts": {pid: library[pid].text for a in compiled.arms
+                             for pid in (a.extractor_prompt if a.extractor else None,
+                                         a.verifier_prompt if a.verifier else None) if pid},
         }
         self._save(exp)
         self._cancel[exp_id] = threading.Event()
@@ -164,13 +171,14 @@ class Runner:
         cancelled = self._cancel.setdefault(exp_id, threading.Event())
         exp = self._update(exp_id, status="running", started_at=_now())
         arms = [Arm(**a) for a in exp["arms"]]
+        texts = exp.get("prompt_texts") or {}
         results = []
         try:
             for i, arm in enumerate(arms):
                 started = time.monotonic()
                 timings: dict = {}
                 try:
-                    summary = self._run_arm(exp_id, i, len(arms), arm, cancelled, timings)
+                    summary = self._run_arm(exp_id, i, len(arms), arm, cancelled, timings, texts)
                     results.append({"arm": arm.id, "label": arm.label(), "mode": arm.mode, "summary": summary,
                                     "error": None, "seconds": round(time.monotonic() - started, 1),
                                     "timings": timings})
@@ -187,8 +195,21 @@ class Runner:
         except Cancelled:
             return self._update(exp_id, status="cancelled", progress=None, results=results, finished_at=_now())
 
+    def _extractor(self, arm: Arm, texts: dict | None = None) -> LLMExtractor:
+        return LLMExtractor(self.provider_factory(arm.extractor), prompt=arm.extractor_prompt,
+                            system_prompt=self._prompt_text(arm.extractor_prompt, texts))
+
+    def _verifier(self, arm: Arm, texts: dict | None = None) -> LLMVerifier:
+        return LLMVerifier(self.provider_factory(arm.verifier), prompt=arm.verifier_prompt,
+                           system_prompt=self._prompt_text(arm.verifier_prompt, texts))
+
+    def _prompt_text(self, prompt_id: str, texts: dict | None) -> str:
+        if texts and prompt_id in texts:
+            return texts[prompt_id]
+        return self.prompts.get(prompt_id).text
+
     def _run_arm(self, exp_id: str, index: int, n_arms: int, arm: Arm, cancelled: threading.Event,
-                 timings: dict) -> dict:
+                 timings: dict, texts: dict | None = None) -> dict:
         out_dir = self.root / exp_id / arm.id
         progress = {"arm": arm.id, "arm_index": index + 1, "arms": n_arms, "mode": arm.mode, "step": "",
                     "done": 0, "total": 0, "model": None, "active_node": None, "path": arm.path, "step_started": None}
@@ -220,7 +241,7 @@ class Runner:
 
         store, errors, runs = None, [], {}
         if arm.extractor:
-            extractor = LLMExtractor(self.provider_factory(arm.extractor), prompt=arm.extractor_prompt)
+            extractor = self._extractor(arm, texts)
             info = extractor.run_info()
             runs["extractor"] = info.model_dump() | {"run_id": info.run_id}
             store = StatementStore(self.cache_dir, info.run_id)
@@ -246,7 +267,7 @@ class Runner:
             summary["error_messages"] = errors[:20]
             return summary
 
-        verifier = LLMVerifier(self.provider_factory(arm.verifier))
+        verifier = self._verifier(arm, texts)
         info = verifier.run_info()
         runs["verifier"] = info.model_dump() | {"run_id": info.run_id}
         step("verify", len(pairs))
@@ -305,7 +326,7 @@ class Runner:
                 continue
             extract_calls = cached = 0
             if arm.extractor:
-                run_id = LLMExtractor(self.provider_factory(arm.extractor), prompt=arm.extractor_prompt).run_info().run_id
+                run_id = self._extractor(arm).run_info().run_id
                 done = set(_cached_doc_ids(self.cache_dir, run_id))
                 for d in doc_ids:
                     if d in done or (run_id, d) in planned:
@@ -399,7 +420,7 @@ class Runner:
                     "experiment": e["id"], "experiment_name": e.get("name"), "date": e.get("created_at"),
                     "arm": r["arm"], "data": arm.data.label(), "mode": arm.mode,
                     "extractor": arm.extractor, "extractor_prompt": arm.extractor_prompt,
-                    "verifier": arm.verifier, "pairs": s.get("pairs"),
+                    "verifier": arm.verifier, "verifier_prompt": arm.verifier_prompt, "pairs": s.get("pairs"),
                     "macro_f1": label.get("macro_f1"), "accuracy": label.get("accuracy"),
                     "rationale_f1": rat.get("f1"), "statements": ext.get("statements"),
                     "grounded_rate": ext.get("grounded_rate"), "rationale_coverage": ext.get("rationale_coverage"),
@@ -435,11 +456,12 @@ def _comparisons(arms: list[Arm], results: list[dict]) -> list[dict]:
         if s.mode != "statements" or s.id not in by_id:
             continue
         for a in arms:
-            if a.mode == "abstract" and a.data == s.data and a.verifier == s.verifier and a.id in by_id:
+            if a.mode == "abstract" and a.abstract_key() == s.abstract_key() and a.id in by_id:
                 fa = by_id[a.id]["summary"]["label"]["macro_f1"]
                 fs = by_id[s.id]["summary"]["label"]["macro_f1"]
                 out.append({"abstract_arm": a.id, "statements_arm": s.id, "verifier": s.verifier,
-                            "extractor": s.extractor, "extraction_loss_macro_f1": round(fa - fs, 4)})
+                            "verifier_prompt": s.verifier_prompt, "extractor": s.extractor,
+                            "extractor_prompt": s.extractor_prompt, "extraction_loss_macro_f1": round(fa - fs, 4)})
     return out
 
 
@@ -470,10 +492,13 @@ def auto_name(arms: list[Arm]) -> str:
     def short(spec):
         return spec.split(":", 1)[1] if spec and ":" in spec else spec
     models = list(dict.fromkeys(short(m) for a in arms for m in (a.extractor, a.verifier) if m))
-    prompts = list(dict.fromkeys(a.extractor_prompt for a in arms if a.extractor))
+    xp = list(dict.fromkeys(a.extractor_prompt for a in arms if a.extractor))
+    vp = list(dict.fromkeys(a.verifier_prompt for a in arms if a.verifier))
     parts = [" vs ".join(models)]
-    if len(prompts) > 1:
-        parts.append("prompt " + " vs ".join(p.replace("extract-", "") for p in prompts))
+    if len(xp) > 1 or any(p != "extract-v1" for p in xp):
+        parts.append("prompt " + " vs ".join(p.removeprefix("extract-") for p in xp))
+    if len(vp) > 1 or any(p != "verify-v1" for p in vp):
+        parts.append("judge prompt " + " vs ".join(p.removeprefix("verify-") for p in vp))
     data = " + ".join(dict.fromkeys(a.data.label() for a in arms))
     modes = {a.mode for a in arms}
     what = ("abstracts vs statements" if {"abstract", "statements"} <= modes else

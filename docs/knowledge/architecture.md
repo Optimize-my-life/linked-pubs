@@ -72,7 +72,15 @@ Each arm records seconds per model call by step and model (`timings`), which the
 estimate time on that machine. `/api/experiments/{id}/compare/{a}/{s}` lists the pairs where an
 abstract arm and a statements arm disagree; `/api/leaderboard` lists all finished arms. The
 explanatory texts of the UI live in `web/src/explain.ts` (tested in `explain.test.ts`).
-Extraction prompts are versioned in `extract/llm_extractor.py` (`PROMPTS`, `PROMPT_NOTES`); an
-Extractor block (or `--extract-prompt`) picks one. The prompt text is part of the run id, so
-each version has its own statement cache. Add a version instead of editing one that has results. `run_id` = hash of component,
+Prompts: built-in versions live in `extract/llm_extractor.py` (`PROMPTS`) and
+`resolve/llm_verifier.py`; prompts written in the UI go to `data/prompts/<id>.json`
+(`server/prompts.py`). Saved prompts are immutable (editing saves a new one with `base`), and
+each experiment stores the prompt texts it used (`prompt_texts`). The prompt text is part of
+the run id, so each version has its own statement cache. The CLI only knows the built-ins.
+Model blocks hold lists (`models`, `prompts`; old graphs: `model`, `prompt`): every
+combination becomes an arm, max 40 per experiment. A statements arm without an abstract arm
+on the same data, verifier and judge prompt gets one added (`auto: true`), so every extractor
+gets its loss measured. The Models tab builds such graphs from ticked models
+(`web/src/templates.ts`) and downloads models through Ollama's `/api/pull`
+(`/api/models/catalog`, `/api/models/pull`). `run_id` = hash of component,
 provider, model, prompt hash and config, so any change to these starts a fresh cache.

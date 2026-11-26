@@ -20,15 +20,20 @@ evidence items you relied on; leave the list empty for NOT_ENOUGH_INFO."""
 
 
 class LLMVerifier:
-    def __init__(self, provider: LLMProvider):
+    def __init__(self, provider: LLMProvider, prompt: str = PROMPT_VERSION, system_prompt: str | None = None):
+        # system_prompt: text of a custom prompt from the server's prompt library; `prompt` is its id.
+        if system_prompt is None and prompt != PROMPT_VERSION:
+            raise ValueError(f"unknown verification prompt '{prompt}'")
         self.provider = provider
+        self.prompt = prompt
+        self.system_prompt = system_prompt if system_prompt is not None else SYSTEM_PROMPT
 
     def run_info(self) -> RunInfo:
         return RunInfo(
             component="llm_verifier",
             provider=self.provider.name,
             model=self.provider.model,
-            prompt_hash=text_hash(PROMPT_VERSION, SYSTEM_PROMPT),
+            prompt_hash=text_hash(self.prompt, self.system_prompt),
             config=self.provider.config(),
         )
 
@@ -38,6 +43,6 @@ class LLMVerifier:
             return Verdict(explanation="No evidence given.", label=Label.NEI, evidence_ids=[], run_id=run_id)
         items = "\n".join(f"[{i}] {e}" for i, e in enumerate(evidence))
         user = f"Claim: {claim}\n\nEvidence:\n{items}"
-        out = self.provider.generate(SYSTEM_PROMPT, user, VerifierOutput, max_tokens=4000)
+        out = self.provider.generate(self.system_prompt, user, VerifierOutput, max_tokens=4000)
         ids = [i for i in out.evidence_ids if 0 <= i < len(evidence)]
         return Verdict(explanation=out.explanation, label=out.label, evidence_ids=ids, run_id=run_id)

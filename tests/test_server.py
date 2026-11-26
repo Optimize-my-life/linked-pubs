@@ -174,9 +174,10 @@ def test_two_extraction_prompts_are_two_arms_with_separate_caches(tmp_path):
     graph = _graph([("d", "dataset"), ("x", "extractor"), ("v", "verifier"), ("m", "metrics")],
                    [("d", "dataset"), ("x2", "extractor"), ("v", "verifier"), ("m", "metrics")], data=data)
     r = compile_graph(graph)
-    assert r.errors == [] and [a.extractor_prompt for a in r.arms] == ["extract-v1", "extract-v2"]
+    assert r.errors == [] and [(a.mode, a.extractor_prompt, a.auto) for a in r.arms] == [
+        ("statements", "extract-v1", False), ("statements", "extract-v2", False), ("abstract", "extract-v1", True)]
     est = client.post("/api/compile", json=graph.model_dump()).json()["estimates"]
-    assert [e["extract_calls"] for e in est] == [2, 2]  # different prompts share no cache
+    assert [e["extract_calls"] for e in est] == [2, 2, 0]  # different prompts share no cache
     assert {p["id"] for p in client.get("/api/prompts").json()} >= {"extract-v1", "extract-v2"}
     bad = _graph(BASELINE[1], data=dict(MODELS, x={"model": "ollama:fake", "prompt": "nope"}))
     assert any("unknown prompt" in e for e in compile_graph(bad).errors)
@@ -190,3 +191,69 @@ def test_second_server_on_same_data_folder_is_refused(tmp_path):
         Runner(tmp_path, tmp_path / "scifact", tmp_path / "cache", _fake_factory)
     first._lockfile.close()
     Runner(tmp_path, tmp_path / "scifact", tmp_path / "cache", _fake_factory)  # free again
+
+
+def test_block_with_several_models_and_prompts_expands_to_all_combinations():
+    data = {"d": {"split": "dev", "limit": 1},
+            "x": {"models": ["ollama:a", "ollama:b"], "prompts": ["extract-v1", "extract-v2"]},
+            "v": {"models": ["ollama:a", "ollama:c"]}}
+    r = compile_graph(_graph(BASELINE[1], data=data))
+    assert r.errors == []
+    statements = [(a.extractor, a.extractor_prompt, a.verifier) for a in r.arms if a.mode == "statements"]
+    assert len(statements) == 8 and ("ollama:b", "extract-v2", "ollama:c") in statements
+    # One automatic abstract baseline per verifier, so every statements arm gets a loss.
+    assert [(a.verifier, a.auto, a.path) for a in r.arms if a.mode == "abstract"] == [
+        ("ollama:a", True, ["d", "v", "m"]), ("ollama:c", True, ["d", "v", "m"])]
+    # Drawn baselines are not duplicated.
+    r = compile_graph(_graph(*BASELINE, data=data))
+    assert [a.auto for a in r.arms if a.mode == "abstract"] == [False, False]
+    many = dict(data, x={"models": [f"ollama:m{i}" for i in range(25)], "prompts": ["extract-v1", "extract-v2"]})
+    assert any("too many" in e for e in compile_graph(_graph(BASELINE[1], data=many)).errors)
+
+
+def test_custom_prompts_are_saved_used_and_kept_apart(tmp_path):
+    client = _client(tmp_path)
+    v1 = next(p for p in client.get("/api/prompts").json() if p["id"] == "extract-v1")
+    assert v1["builtin"] and v1["kind"] == "extract"
+    assert "identical" in client.post("/api/prompts", json={"kind": "extract", "name": "copy",
+                                                            "text": v1["text"]}).json()["detail"]
+    new = client.post("/api/prompts", json={"kind": "extract", "name": "Dose focus", "note": "keeps doses",
+                                            "text": v1["text"] + " Always keep doses.", "base": "extract-v1"}).json()
+    assert new["id"] == "extract-dose-focus" and new["base"] == "extract-v1"
+    vnew = client.post("/api/prompts", json={"kind": "verify", "name": "strict",
+                                             "text": "Judge strictly. Labels: SUPPORT, CONTRADICT, NOT_ENOUGH_INFO."}).json()
+
+    seen = []
+    def record(s, u, schema):
+        seen.append(s)
+        return (_fake_extract if schema is ExtractionOutput else _fake_verify)(s, u, schema)
+    client.app.state.runner.provider_factory = lambda spec: FakeProvider(record)
+    data = dict(MODELS, x={"models": ["ollama:fake"], "prompts": [new["id"]]},
+                v={"models": ["ollama:fake"], "prompts": [vnew["id"]]})
+    graph = _graph(BASELINE[1], data=data).model_dump()
+    assert client.post("/api/compile", json=graph).json()["errors"] == []
+    exp = _wait(client, client.post("/api/experiments", json={"graph": graph}).json()["id"])
+    assert exp["status"] == "done", exp
+    assert any(s.endswith("Always keep doses.") for s in seen) and any(s.startswith("Judge strictly.") for s in seen)
+    assert exp["prompt_texts"][new["id"]].endswith("Always keep doses.")
+    assert [(c["statements_arm"], c["abstract_arm"]) for c in exp["comparisons"]] == [("arm1", "arm2")]
+
+    # A wrong kind is rejected; deleting keeps finished results readable.
+    bad = dict(MODELS, x={"models": ["ollama:fake"], "prompts": [vnew["id"]]})
+    assert any("unknown prompt" in e for e in client.post("/api/compile", json=_graph(BASELINE[1], data=bad).model_dump()).json()["errors"])
+    assert client.delete(f"/api/prompts/{new['id']}").status_code == 200
+    assert client.delete("/api/prompts/extract-v1").status_code == 400
+    assert client.get(f"/api/experiments/{exp['id']}").json()["status"] == "done"
+
+
+def test_model_catalog_and_pull_name_check(tmp_path, monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:9")  # nothing listens: no models installed
+    client = _client(tmp_path)
+    cat = client.get("/api/models/catalog").json()
+    assert any(c["name"] == "qwen3:14b" and c["installed"] is False for c in cat)
+    assert client.post("/api/models/pull", json={"name": "rm -rf /"}).status_code == 400
+    st = client.post("/api/models/pull", json={"name": "qwen3:4b"}).json()
+    assert st["name"] == "qwen3:4b"
+    time.sleep(0.5)
+    st = next(c for c in client.get("/api/models/catalog").json() if c["name"] == "qwen3:4b")["pull"]
+    assert st["status"] in ("starting", "failed")  # no Ollama here, so it cannot succeed
